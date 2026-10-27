@@ -55,9 +55,12 @@ def build(destination: Path) -> str:
         result.write(data)
         result.flush()
         os.fsync(result.fileno())
-    # Source checkout and portable export have the same exact manifest.
+    # The build never edits the source tree. A stale checked-in manifest is a
+    # failure the operator must resolve explicitly (--write-manifest).
     with ZipFile(io.BytesIO(data)) as archive:
-        (source.ROOT / "SOURCE_MANIFEST.sha256").write_bytes(archive.read("SOURCE_MANIFEST.sha256"))
+        if archive.read("SOURCE_MANIFEST.sha256") != (source.ROOT / "SOURCE_MANIFEST.sha256").read_bytes():
+            destination.unlink()
+            raise ValueError("SOURCE_MANIFEST.sha256 does not match sources; run tools/build_release.py --write-manifest")
     return hashlib.sha256(data).hexdigest()
 
 

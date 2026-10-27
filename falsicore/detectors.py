@@ -6,8 +6,6 @@ import fnmatch
 import ipaddress
 import json
 import re
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Iterable
 
 MAX_JSON_BYTES = 1_048_576
@@ -154,6 +152,42 @@ def analyze_browser_flags(argv: list[str]) -> list[str]:
             if a == flag or a.startswith(flag + "="):
                 out.append(flag)
     return sorted(set(out))
+
+
+SANDBOX_REDUCING_FLAGS = ("--no-sandbox", "--disable-web-security", "--disable-site-isolation-trials")
+TRUST_REDUCING_FLAGS = ("--ignore-certificate-errors", "--allow-running-insecure-content")
+
+
+def browser_flag_review(argv: list[str]) -> dict:
+    """Separate what each flag actually changes.
+
+    --remote-debugging-pipe exposes DevTools over inherited file descriptors to
+    the launching process only: it opens no network port. Only
+    --remote-debugging-port can create a listener, which is correlated with the
+    observed socket table separately, never assumed.
+    """
+    flags = analyze_browser_flags(argv)
+    port = None
+    for a in argv:
+        if a.startswith("--remote-debugging-port="):
+            value = a.split("=", 1)[1]
+            port = value if value.isdigit() and 0 <= int(value) <= 65535 else "INVALID"
+    channel = ("port" if "--remote-debugging-port" in flags
+               else "pipe" if "--remote-debugging-pipe" in flags else None)
+    sandbox = any(f in flags for f in SANDBOX_REDUCING_FLAGS)
+    parts = []
+    if sandbox:
+        parts.append("browser renderer sandbox or site isolation reduced")
+    if any(f in flags for f in TRUST_REDUCING_FLAGS):
+        parts.append("TLS/content trust checks relaxed")
+    if channel == "pipe":
+        parts.append("DevTools control over a local pipe held by the launching process (no network port)")
+    elif channel == "port":
+        parts.append("DevTools control over a TCP port; reachability depends on the observed listener")
+    if "--load-extension" in flags:
+        parts.append("unpacked extension loaded from the command line")
+    return {"flags": flags, "sandbox_reduced": sandbox, "debug_channel": channel, "debug_port": port,
+            "hypothesis": "; ".join(parts) or "browser launched with review-worthy flags"}
 
 
 def endpoint_class(endpoint: str) -> str:

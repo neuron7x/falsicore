@@ -16,7 +16,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-MAX_COMMAND_OUTPUT = 2 * 1024 * 1024
+MAX_COMMAND_OUTPUT = 32 * 1024 * 1024
+MAX_DIAGNOSTIC_OUTPUT = 64 * 1024
 TRUSTED_BIN_DIRS = ("/usr/bin", "/usr/sbin", "/bin", "/sbin")
 COMMAND_ALLOWLIST = {
     "uname", "ss", "ip", "journalctl", "systemctl", "dpkg", "ufw",
@@ -45,7 +46,8 @@ def minimal_env() -> dict[str, str]:
     return env
 
 
-def run_command(name: str, args: list[str], timeout: float = 12.0, limit: int = MAX_COMMAND_OUTPUT) -> dict:
+def run_command(name: str, args: list[str], timeout: float = 12.0, limit: int = MAX_COMMAND_OUTPUT,
+                env: dict[str, str] | None = None) -> dict:
     """Capture a bounded subprocess tree without shell expansion.
 
     Success requires BOTH the direct child to exit with zero and the output
@@ -55,12 +57,37 @@ def run_command(name: str, args: list[str], timeout: float = 12.0, limit: int = 
     """
     binary = checked_executable(name)
     if binary is None:
-        return {"status": "UNAVAILABLE", "stdout": "", "exit": None, "elapsed_ms": 0, "truncated": False, "error": "binary missing"}
-    return _run_bounded(binary, args, timeout, limit)
+        return {"status": "UNAVAILABLE", "stdout": "", "stderr": "", "exit": None, "elapsed_ms": 0,
+                "truncated": False, "error": "binary missing", "residual_killed": False}
+    return _run_bounded(binary, args, timeout, limit, env=env)
 
 
-def _run_bounded(binary: str, args: list[str], timeout: float, limit: int) -> dict:
-    """Internal executor; system probes use the allowlist in run_command."""
+def _leader_exit(pid: int) -> int | None:
+    """Exit code of the group leader WITHOUT reaping it.
+
+    A zombie leader keeps its PID, and therefore its process-group ID, reserved.
+    Reaping only after the final killpg() guarantees the signal cannot reach a
+    foreign group that reused the number.
+    """
+    try:
+        info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except ChildProcessError:
+        return None
+    if info is None or info.si_pid == 0:
+        return None
+    if info.si_code == os.CLD_EXITED:
+        return info.si_status
+    return -info.si_status
+
+
+def _run_bounded(binary: str, args: list[str], timeout: float, limit: int,
+                 merge_stderr: bool = False, env: dict[str, str] | None = None) -> dict:
+    """Internal executor; system probes use the allowlist in run_command.
+
+    stdout is the parsed channel and is bounded by `limit`; overflow is PARTIAL
+    and kills the group. stderr is diagnostics only, bounded separately and never
+    parsed as data unless `merge_stderr` is requested (self-test transcript).
+    """
     if any(not isinstance(a, str) or "\x00" in a for a in args):
         raise ValueError("Invalid command argument")
     if timeout <= 0 or timeout > 180 or limit < 0 or limit > MAX_COMMAND_OUTPUT:
@@ -70,44 +97,52 @@ def _run_bounded(binary: str, args: list[str], timeout: float, limit: int) -> di
     deadline = started + timeout
     proc: subprocess.Popen | None = None
     captured = bytearray()
+    diagnostics = bytearray()
     status, error, truncated, exit_code = "FAILED", "", False, None
+    residual_killed = False
     selector = selectors.DefaultSelector()
     must_kill = False
     try:
         proc = subprocess.Popen(
-            [binary, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL, env=minimal_env(), shell=False,
+            [binary, *args], stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
+            stdin=subprocess.DEVNULL, env=env if env is not None else minimal_env(), shell=False,
             start_new_session=True, close_fds=True,
         )
-        assert proc.stdout is not None
-        os.set_blocking(proc.stdout.fileno(), False)
-        selector.register(proc.stdout, selectors.EVENT_READ)
+        streams = [s for s in (proc.stdout, proc.stderr) if s is not None]
+        for stream in streams:
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ)
 
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 error, must_kill = "timeout", True
                 break
-
-            # There may be no open stdout descriptor even though the child is
-            # still running. Do not label that condition successful.
+            leader = _leader_exit(proc.pid)
+            # There may be no open pipe even though the child is still running.
+            # Do not label that condition successful.
             if not selector.get_map():
-                if proc.poll() is not None:
+                if leader is not None:
+                    exit_code = leader
                     break
-                try:
-                    proc.wait(timeout=min(remaining, 0.05))
-                except subprocess.TimeoutExpired:
-                    pass
+                time.sleep(min(remaining, 0.02))
                 continue
 
             events = selector.select(timeout=min(remaining, 0.05))
             for key, _ in events:
+                is_stdout = key.fileobj is proc.stdout
+                budget = limit + 1 - len(captured) if is_stdout else 65536
                 try:
-                    chunk = os.read(key.fd, min(65536, max(1, limit + 1 - len(captured))))
+                    chunk = os.read(key.fd, min(65536, max(1, budget)))
                 except BlockingIOError:
                     continue
                 if not chunk:
                     selector.unregister(key.fileobj)
+                    continue
+                if not is_stdout:
+                    if len(diagnostics) < MAX_DIAGNOSTIC_OUTPUT:
+                        diagnostics.extend(chunk[:MAX_DIAGNOSTIC_OUTPUT - len(diagnostics)])
                     continue
                 captured.extend(chunk)
                 if len(captured) > limit:
@@ -116,12 +151,16 @@ def _run_bounded(binary: str, args: list[str], timeout: float, limit: int) -> di
                     break
             if must_kill:
                 break
-            if proc.poll() is not None and not selector.get_map():
-                break
+            if not selector.get_map():
+                leader = _leader_exit(proc.pid)
+                if leader is not None:
+                    exit_code = leader
+                    break
 
         if not must_kill:
-            exit_code = proc.wait(timeout=0)
             status = "COMPLETED" if exit_code == 0 else "FAILED"
+            if exit_code is not None and exit_code < 0:
+                error = "signal:" + _signal_name(-exit_code)
         else:
             status = "PARTIAL" if truncated else "FAILED"
     except (OSError, subprocess.SubprocessError) as exc:
@@ -132,27 +171,70 @@ def _run_bounded(binary: str, args: list[str], timeout: float, limit: int) -> di
         raise
     finally:
         if proc is not None:
-            if must_kill:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                except PermissionError:
-                    error = error or "PROCESS_GROUP_CLEANUP_DENIED"
+            # The leader is not reaped yet, so the group ID is still ours. Any
+            # member still alive (a daemonized grandchild after a successful
+            # exit included) belongs to this probe and is killed.
+            residual_killed = not must_kill and _group_has_live_members(proc.pid)
             try:
-                if exit_code is None:
-                    exit_code = proc.wait(timeout=2)
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                error = error or "PROCESS_GROUP_CLEANUP_DENIED"
+            try:
+                reaped = proc.wait(timeout=2)
+                if exit_code is None and not must_kill:
+                    exit_code = reaped
+                elif exit_code is None:
+                    exit_code = reaped
             except subprocess.TimeoutExpired:
                 error = error or "PROCESS_GROUP_REAP_TIMEOUT"
-            if proc.stdout is not None:
-                proc.stdout.close()
+            if must_kill and selector.get_map():
+                # A pipe holder that escaped the group (setsid) keeps the pipe
+                # open after killpg. Report it instead of waiting for it.
+                if not selector.select(timeout=0.2):
+                    error = (error + ";" if error else "") + "PIPE_HOLDER_OUTSIDE_GROUP"
+            for stream in (proc.stdout, proc.stderr):
+                if stream is not None:
+                    stream.close()
         selector.close()
 
     return {
         "status": status, "stdout": captured.decode("utf-8", "replace"),
+        "stderr": diagnostics.decode("utf-8", "replace"),
         "exit": exit_code, "elapsed_ms": max(0, int((time.monotonic() - started) * 1000)),
-        "truncated": truncated, "error": error,
+        "truncated": truncated, "error": error, "residual_killed": residual_killed,
     }
+
+
+def _group_has_live_members(pgid: int) -> bool:
+    """True if a non-zombie process other than the leader is in group `pgid`.
+
+    A zombie leader also answers killpg(), so its success alone says nothing.
+    """
+    try:
+        entries = os.scandir("/proc")
+    except OSError:
+        return False
+    with entries:
+        for entry in entries:
+            if not entry.name.isdigit() or int(entry.name) == pgid:
+                continue
+            try:
+                with open(f"/proc/{entry.name}/stat", "rb") as f:
+                    fields = f.read(4096).rsplit(b")", 1)[1].split()
+            except (OSError, IndexError):
+                continue
+            if len(fields) > 2 and fields[2] == str(pgid).encode() and fields[0] != b"Z":
+                return True
+    return False
+
+
+def _signal_name(number: int) -> str:
+    try:
+        return signal.Signals(number).name
+    except ValueError:
+        return str(number)
 
 
 def safe_read(path: Path, limit: int = 131_072) -> tuple[bytes | None, str]:
@@ -269,4 +351,5 @@ def run_test_suite(checkout: Path) -> dict:
         "r=unittest.TextTestRunner(verbosity=1).run(suite);"
         "sys.exit(0 if r.wasSuccessful() else 1)"
     )
-    return _run_bounded(sys.executable, ["-I", "-B", "-c", program, str(checkout)], 180, 1048576)
+    return _run_bounded(sys.executable, ["-I", "-B", "-c", program, str(checkout)], 180, 1048576,
+                        merge_stderr=True)

@@ -12,7 +12,8 @@
 | Source-pattern audit finds selected unsafe idioms | nine AST rules + fixture corpus | static audit without high findings or collection gaps |
 | Distribution is reproducible | byte-identical independent ZIP builds | SHA-256 equality |
 | Distribution is complete | source allowlist + exact manifest verification | no unexpected files and complete hashes |
-| Collected report is internally coherent | SHA-256 manifest and semantic recomputation of outcome/counts/gaps | verifier PASS, malicious rehash/inconsistency regression PASS |
+| Collected report is internally coherent | SHA-256 manifest and semantic recomputation of outcome/counts/gaps/reason codes/baseline | verifier PASS, malicious rehash/inconsistency/baseline-edit regressions PASS |
+| Tests guard the protections they claim to | targeted fault injection on an isolated copy | every mutant killed (docs/AUDIT.md) |
 | Endpoint is not compromised | representative labeled corpus, host event coverage, independent forensic analysis | **NOT ESTABLISHED** |
 
 ## Safety invariants
@@ -45,4 +46,4 @@
 - Synthetic precision/recall apply **only** to the fixed artificial code-pattern fixture corpus; never generalize them to malware or unseen vulnerabilities.
 - `NO_COMPROMISE_INDICATORS_OBSERVED` is bounded to the accessible data and configured rules.
 
-The release evidence is in `RELEASE_EVIDENCE.json`; values apply only to the recorded testing environment. GitHub CI results are not asserted until observed on GitHub.
+The release evidence is in `RELEASE_EVIDENCE.json` and `AUDIT.md`; values apply only to the recorded testing environment. GitHub CI results are not asserted until observed on GitHub.

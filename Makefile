@@ -1,4 +1,4 @@
-.PHONY: test smoke doctor scan verify-source source-audit rule-fixtures coverage release
+.PHONY: test smoke doctor scan verify-source source-audit rule-fixtures coverage release release-full manifest
 PYTHON ?= python3
 
 test:
@@ -15,6 +15,10 @@ doctor:
 
 verify-source:
 	sha256sum -c SOURCE_MANIFEST.sha256
+	$(PYTHON) tools/build_release.py --check-manifest
+
+manifest:
+	$(PYTHON) tools/build_release.py --write-manifest
 
 source-audit:
 	$(PYTHON) tools/code_audit.py . --fail-on high
@@ -24,7 +28,10 @@ rule-fixtures:
 
 coverage:
 	$(PYTHON) -m coverage run --branch --source=falsicore -m unittest discover -s tests -q
-	$(PYTHON) -m coverage report -m
+	$(PYTHON) -m coverage report -m --fail-under=88
 
 release:
 	@out=$$(mktemp -d); $(PYTHON) tools/build_app.py "$$out/falsicore.pyz"; echo "RELEASE: $$out/falsicore.pyz"
+
+release-full:
+	@out=$$(mktemp -d); $(PYTHON) tools/build_full.py "$$out"; echo "FULL RELEASE: $$out"

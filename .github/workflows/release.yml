@@ -5,11 +5,12 @@ on:
 permissions:
   contents: read
 jobs:
-  source-release:
+  build:
+    # Tests and builds run without write access; only the publish job can write.
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,28 +34,49 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum -c SOURCE_MANIFEST.sha256
+          python tools/build_release.py --check-manifest
           python -m unittest discover -s tests -q
           python tools/code_audit.py . --fail-on high
           python -m tools.evaluate_rules
-      - name: Deterministic package and checksum
+      - name: Deterministic builds (twice) with external checksums
         shell: bash
         run: |
           set -euo pipefail
-          python tools/build_app.py "$RUNNER_TEMP/falsicore.pyz"
-          python tools/build_app.py "$RUNNER_TEMP/independent.pyz"
-          cmp "$RUNNER_TEMP/falsicore.pyz" "$RUNNER_TEMP/independent.pyz"
-          ( cd "$RUNNER_TEMP" && sha256sum falsicore.pyz > falsicore.pyz.sha256 )
-          python -I "$RUNNER_TEMP/falsicore.pyz" verify-app
-          python -I "$RUNNER_TEMP/falsicore.pyz" self-test
-          git diff --exit-code -- SOURCE_MANIFEST.sha256
+          out="$RUNNER_TEMP/out"
+          python tools/build_app.py "$RUNNER_TEMP/a.pyz"
+          python tools/build_app.py "$RUNNER_TEMP/b.pyz"
+          cmp "$RUNNER_TEMP/a.pyz" "$RUNNER_TEMP/b.pyz"
+          python tools/build_full.py "$out"
+          python tools/build_full.py "$RUNNER_TEMP/again"
+          cmp "$out"/*.zip "$RUNNER_TEMP"/again/*.zip
+          cp "$RUNNER_TEMP/a.pyz" "$out/falsicore.pyz"
+          ( cd "$out" && sha256sum falsicore.pyz > falsicore.pyz.sha256 )
+          python -I "$out/falsicore.pyz" verify-app
+          python -I "$out/falsicore.pyz" self-test
+          git diff --exit-code
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-artifacts
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-artifacts
+          path: out
       - name: Publish from tagged commit only
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "$GITHUB_REF_NAME" \
-            "$RUNNER_TEMP/falsicore.pyz" \
-            "$RUNNER_TEMP/falsicore.pyz.sha256" \
+          gh release create "$GITHUB_REF_NAME" out/* \
             --verify-tag --title "FALSICORE $GITHUB_REF_NAME" \
-            --notes "Experimental offline endpoint triage. No guaranteed malware detection; refer to SECURITY.md and docs/ASSURANCE.md."
+            --notes "Experimental offline endpoint triage. No guaranteed malware detection; see SECURITY.md and docs/AUDIT.md. Verify the external .sha256 files before running."

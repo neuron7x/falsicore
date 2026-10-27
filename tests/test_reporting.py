@@ -20,7 +20,7 @@ class ReportingTests(unittest.TestCase):
         )
 
     def test_report_schema(self):
-        self.assertEqual(report_data(self.fake())["schema"], "falsicore.summary.v3")
+        self.assertEqual(report_data(self.fake())["schema"], "falsicore.summary.v4")
 
     def test_no_claim_of_compromise(self):
         self.assertFalse(report_data(self.fake())["confirmed_compromise"])

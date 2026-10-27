@@ -33,7 +33,14 @@ class CollectorFixtureTests(unittest.TestCase):
         self.assertEqual(profs, 1)
         self.assertFalse(tr)
         self.assertEqual(self.a.findings[0]["kind"], "EXPOSURE")
-        self.assertNotIn("instagram.com", json.dumps(self.a.findings))
+        # Raw manifest strings live only in the private identity block that
+        # share-safe output strips; the canonical summary keeps booleans.
+        evidence = dict(self.a.findings[0]["evidence"])
+        identity = evidence.pop("extension")
+        self.assertNotIn("instagram.com", json.dumps(evidence))
+        self.assertEqual(identity["declared_host_permissions"], ["https://www.instagram.com/*"])
+        self.assertEqual(identity["extension_id"], "abcdef")
+        self.assertEqual(identity["enabled"], "UNKNOWN")
 
     def test_chromium_simple_extension_no_finding(self):
         p = self.home / ".config/chromium/Profile 1/Extensions/abcdef/1.0/manifest.json"
@@ -160,7 +167,8 @@ class CollectorFixtureTests(unittest.TestCase):
         self.a._files = lambda *_args, **_kwargs: ([source], False)
         self.a.packages()
         self.assertFalse(any(x["rule"] == "INSECURE_APT_REPOSITORY_SETTING" for x in self.a.findings))
-        self.assertEqual(self.a.coverage[-1]["status"], "PARTIAL")
+        # dpkg --verify is deep-only: declared as a profile limit, not hidden.
+        self.assertEqual(self.a.coverage[-1]["scope_limits"], {"NOT_IN_PROFILE": 1})
 
     def test_package_trust_bypass(self):
         source = self.home / "bad.sources"
@@ -198,7 +206,9 @@ class CollectorFixtureTests(unittest.TestCase):
     def test_kernel_passive(self):
         self.a.kernel()
         self.assertEqual(self.a.coverage[-1]["check"], "kernel")
-        self.assertEqual(self.a.coverage[-1]["status"], "PARTIAL")
+        # Live-kernel limits are stated in details; user scope adds a scope limit.
+        self.assertIn("Cannot rule out kernel/rootkit", self.a.coverage[-1]["details"])
+        self.assertIn("REQUIRES_SYSTEM_SCOPE", self.a.coverage[-1]["scope_limits"])
 
 class SnapFlatpakFixtureTests(unittest.TestCase):
     setUp = CollectorFixtureTests.setUp

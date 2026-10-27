@@ -11,6 +11,8 @@ import os
 import stat
 import sys
 import tempfile
+import threading
+import time
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -95,8 +97,27 @@ def self_test(payload: dict[str, bytes]) -> int:
     """Run the embedded full unittest suite in an ephemeral source checkout."""
     with tempfile.TemporaryDirectory(prefix="falsicore-selftest-") as folder:
         checkout = export_source(payload, Path(folder) / "source")
-        result = run_test_suite(checkout)
+        print("self-test: running embedded suite (deadline 180 s)...", file=sys.stderr, flush=True)
+        stop = threading.Event()
+        started = time.monotonic()
+
+        def beat() -> None:
+            while not stop.wait(10):
+                try:
+                    print(f"self-test: still running, {time.monotonic() - started:.0f} s", file=sys.stderr, flush=True)
+                except (OSError, ValueError):
+                    return
+        heartbeat = threading.Thread(target=beat, name="falsicore-selftest-progress", daemon=True)
+        heartbeat.start()
+        try:
+            result = run_test_suite(checkout)
+        finally:
+            stop.set()
+            heartbeat.join(timeout=1)
         print(result["stdout"])
+        if result["status"] != "COMPLETED":
+            print(f"SELF-TEST {result['status']}: exit={result['exit']} error={result['error'] or 'test failures'}",
+                  file=sys.stderr)
         return 0 if result["status"] == "COMPLETED" else 1
 
 

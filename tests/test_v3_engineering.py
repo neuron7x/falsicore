@@ -174,7 +174,7 @@ class ReportIntegrityTests(unittest.TestCase):
             self.assertEqual(find_baseline(root, report_data(fixture())), prev / "summary.json")
             nxt.mkdir(mode=0o700)
             summary = write_reports(nxt, fixture(), auto_baseline_parent=root)
-            self.assertEqual(summary["baseline_comparison"]["status"], "VERIFIED_LOCAL_COMPARISON")
+            self.assertEqual(summary["baseline_comparison"]["status"], "LOCAL_CONSISTENT_COMPARISON")
             self.assertTrue((nxt / "baseline_diff.json").exists())
 
     def test_auto_baseline_skips_tampered(self):

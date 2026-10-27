@@ -66,7 +66,7 @@ class ProcessAndNetworkFixtures(unittest.TestCase):
             ss = "tcp LISTEN 0 128 *:3389 *:*\n"
             audit.command = lambda *a, **k: {"status": "COMPLETED", "stdout": ss, "exit": 0}
             audit.network()
-            self.assertEqual(audit.coverage[-1]["status"], "PARTIAL")
+            self.assertIn("OTHER_ACCOUNTS_NOT_VISIBLE", audit.coverage[-1]["scope_limits"])
             self.assertEqual(audit.stats["network"]["listeners_without_process_identity"], 1)
 
 
@@ -180,7 +180,7 @@ class JournalAndPackageFixtures(unittest.TestCase):
             audit.command = lambda *a, **k: {"status": "FAILED", "stdout": "??5?????? c /etc/example.conf\n",
                                                   "exit": 1, "truncated": False, "error": ""}
             audit.packages()
-            self.assertEqual(audit.coverage[-1]["status"], "PARTIAL")
+            self.assertIn("REQUIRES_SYSTEM_SCOPE", audit.coverage[-1]["scope_limits"])
             self.assertEqual(audit.stats["repos"]["insecure_source_files"], 1)
             self.assertIn("INSECURE_APT_REPOSITORY_SETTING", {f["rule"] for f in audit.findings})
             self.assertIn("DPKG_FILE_DRIFT", {f["rule"] for f in audit.findings})

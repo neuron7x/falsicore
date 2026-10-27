@@ -26,3 +26,6 @@ coverage_matrix.json
 baseline_diff.json
 *.zip
 *.zip.sha256
+
+# Private audit workspace (host observations, rollback)
+.falsicore-audit/

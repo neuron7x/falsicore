@@ -88,7 +88,7 @@ class ReportIntegrityTests(unittest.TestCase):
             folder = Path(td) / "run"
             folder.mkdir(mode=0o700)
             audit = self._audit()
-            audit.checked("auth", "PARTIAL", "synthetic fixture")
+            audit.checked("auth", "PARTIAL", "synthetic fixture", reasons=["INPUT_TRUNCATED"])
             write_reports(folder, audit)
             self.assertTrue(verify_reports(folder)["verified"])
             (folder / "unexpected-private-file").write_text("private")

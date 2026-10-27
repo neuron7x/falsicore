@@ -13,6 +13,6 @@ class InterruptCleanupContracts(unittest.TestCase):
              patch("selectors.EpollSelector.select", side_effect=KeyboardInterrupt), \
              patch.object(safety.os, "killpg", wraps=original_killpg) as killed:
             with self.assertRaises(KeyboardInterrupt):
-                safety.run_command("uname", ["-c", "import time;time.sleep(20)"], timeout=1)
+                safety.run_command("uname", ["-I", "-c", "import time;time.sleep(20)"], timeout=1)
             killed.assert_called_once()
             self.assertEqual(killed.call_args.args[1], signal.SIGKILL)

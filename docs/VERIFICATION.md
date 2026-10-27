@@ -1,38 +1,42 @@
 # Release verification contract
 
-The delivered `.pyz`, not merely a development checkout, must pass its member
-integrity check, embedded unittest suite and actual user/system smoke tests.
-A fresh exported checkout must retain every previous regression-test file.
-Two builds from the same snapshot must have identical bytes. Test a corrupted
-member and an extra untracked member; both must be refused before scanning.
-Test Cyrillic/space-containing launch paths. Preserve reports and source data.
+A release is accepted when **the delivered artifacts** pass the checks below,
+not merely the development checkout. Each claim is bounded by the environment
+it was measured in.
 
-## What was and was not measured
+## Required checks
 
-Unit/integration/adversarial fixtures, source-pattern checks, branch-aware code
-coverage, report checksum/semantic coherence, default-user scans, repeated
-baseline comparison, explicit system/deep scans and root-default rejection
-are separately recorded. Expected error tests are not failed release gates.
-Host telemetry is never included in published evidence logs.
+1. `sha256sum -c SOURCE_MANIFEST.sha256` and `tools/build_release.py --check-manifest`.
+2. The full suite passes, with discovered, passed, failed, errored and skipped
+   counted separately. Every earlier regression-test file is kept.
+3. Branch-aware coverage of `falsicore/` is reported with its denominator and
+   no exclusions. The CI gate is 88%.
+4. Targeted fault injection: each changed protection is removed in an isolated
+   copy, and the relevant tests must fail.
+5. Two `build_app.py` builds and two `build_full.py` builds of the same
+   snapshot are byte-identical.
+6. The full ZIP is extracted into a fresh directory whose path contains spaces
+   and Cyrillic, and these all pass there: `sha256sum -c SHA256SUMS`, the
+   launcher hash check, `verify-app`, `self-test`, the embedded source
+   manifest, a user-scope scan, and `verify` of its report.
+7. A tampered or extra member in the `.pyz` is refused before any scan.
 
-The execution environment is Debian 13 with Python 3.13.5, not the user's
-Ubuntu laptop. Ubuntu 24.04 and Python 3.10/3.12/3.14 jobs are configured for
-hosted CI but are NOT claimed to have run. Bandit installation was attempted
-and blocked by unavailable DNS in the build environment; no Bandit/CodeQL
-pass claim is made. The internal AST checker has nine bounded pattern rules,
-not general vulnerability-detection completeness.
+## Where the results are
 
-## Reference boundaries
+- `docs/AUDIT.md`: defect register, gates, coverage, limitations.
+- The release receipt next to the ZIP (`*.zip.sha256`), plus
+  `verification/` inside the ZIP: tool versions, commands, exit codes,
+  counts, durations. Host observations are never included.
 
-Python's official zipapp documentation supports direct execution of a Python
-archive; it does not certify this application:
-https://docs.python.org/3/library/zipapp.html
+## Boundaries
 
-Python's official shlex documentation describes shell-like lexical analysis,
-not complete Bash semantics. The detector exposes that limitation:
-https://docs.python.org/3/library/shlex.html
-
-The existing NIST/MITRE mappings in the assurance documents are methodological
-references, not certification or measurements of malware-detection efficacy.
-A checksum is not a digital signature. An attacker controlling the kernel or
-the tool and its manifests can forge internally consistent observations.
+- Measured on Ubuntu 24.04.4 with Python 3.12.3 (host, UID 1000).
+  Python 3.10, 3.13 and 3.14 are exercised only by hosted CI, and are claimed
+  only once that run is observed.
+- No system-scope (root) scan was performed for this release.
+- A checksum is not a signature. An attacker who controls the kernel, or the
+  tool and its manifests, can forge internally consistent observations.
+- The internal AST checker is a supplementary pattern audit, not a
+  vulnerability scanner. Bandit and CodeQL are the established analysers.
+- Python's `zipapp` and `shlex` documentation describe mechanisms; they do not
+  certify this application.

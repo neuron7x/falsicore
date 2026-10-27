@@ -19,8 +19,12 @@ class FixedReadOnlyAuditPolicy(unittest.TestCase):
         accepted = [
             ("uname", ["-r"]), ("ss", ["-H", "-tuna", "-p"]),
             ("crontab", ["-l"]), ("crontab", ["-l", "-u", "nobody"]),
-            ("journalctl", ["--since", "2026-10-27 00:00:00 UTC", "--lines", "2500",
-                            "--no-pager", "--output=json", "--output-fields=MESSAGE,_SYSTEMD_UNIT,_COMM,__REALTIME_TIMESTAMP"]),
+            ("journalctl", ["SYSLOG_FACILITY=4", "SYSLOG_FACILITY=10", "--since", "2026-10-27 00:00:00 UTC",
+                            "--lines", "20000", "--no-pager", "--output=json",
+                            "--output-fields=MESSAGE,_SYSTEMD_UNIT,_COMM,__REALTIME_TIMESTAMP"]),
+            ("journalctl", ["_TRANSPORT=kernel", "--since", "2026-10-27 00:00:00 UTC",
+                            "--lines", "5000", "--no-pager", "--output=json",
+                            "--output-fields=MESSAGE,_SYSTEMD_UNIT,_COMM,__REALTIME_TIMESTAMP"]),
             ("dpkg", ["--verify"]), ("aa-status", ["--enabled"]),
             ("mokutil", ["--sb-state"]),
         ]
@@ -69,15 +73,18 @@ class AtomicDistributionContracts(unittest.TestCase):
             with patch.object(build_release, "ROOT", root), \
                  patch.object(build_release, "_read_safe_source", side_effect=mutate_after_read):
                 digest, count = build_release.build(destination)
+                prefix = build_release.archive_prefix()
             self.assertEqual(count, 2)
             self.assertEqual(calls, ["README.md"])
             self.assertEqual(hashlib.sha256(destination.read_bytes()).hexdigest(), digest)
             with ZipFile(destination) as z:
-                self.assertEqual(z.read("falsicore-0.1.0/README.md"), old)
-                manifest = z.read("falsicore-0.1.0/SOURCE_MANIFEST.sha256").decode()
+                # The archive prefix is constant (C-10), not the checkout folder name.
+                self.assertEqual(z.read(prefix + "README.md"), old)
+                manifest = z.read(prefix + "SOURCE_MANIFEST.sha256").decode()
                 self.assertEqual(manifest, hashlib.sha256(old).hexdigest() + "  README.md\n")
                 self.assertEqual(z.testzip(), None)
             self.assertEqual(source.read_bytes(), b"source-v2\n")
+            self.assertFalse((root / "SOURCE_MANIFEST.sha256").exists(), "build must not edit the tree")
 
     def test_build_does_not_replace_existing_release(self):
         with tempfile.TemporaryDirectory() as td:
@@ -104,6 +111,17 @@ class AtomicDistributionContracts(unittest.TestCase):
             self.assertEqual(a,b)
             self.assertEqual(d1.read_bytes(),d2.read_bytes())
 
+    def test_archive_bytes_do_not_depend_on_checkout_folder_name(self):
+        with tempfile.TemporaryDirectory() as td:
+            digests = []
+            for folder in ("falsicore", "renamed checkout ✓"):
+                root = Path(td) / folder
+                (root / "falsicore").mkdir(parents=True)
+                (root / "falsicore" / "__init__.py").write_text('__version__ = "9.9.9"\n')
+                with patch.object(build_release, "ROOT", root):
+                    digests.append(build_release.build(Path(td) / (folder + ".zip"))[0])
+            self.assertEqual(digests[0], digests[1])
+
 
 class PublicReportRedactionContracts(unittest.TestCase):
     def test_private_source_stays_in_private_index_only_and_html_escapes(self):
@@ -116,7 +134,7 @@ class PublicReportRedactionContracts(unittest.TestCase):
             private = "/home/very-secret/credentials.json"
             audit.finding("TEST_INDICATOR", "high", "synthetic only", private,
                           {"present": True})
-            audit.checked("browsers", "PARTIAL", "<script>untrusted-text</script>")
+            audit.checked("browsers", "PARTIAL", "<script>untrusted-text</script>", reasons=["MALFORMED_INPUT"])
             write_reports(folder, audit)
             self.assertTrue(verify_reports(folder)["verified"])
             self.assertIn(private, (folder / "private_index.json").read_text())

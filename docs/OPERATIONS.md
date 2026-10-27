@@ -21,17 +21,19 @@
 | Root metadata scan (opt-in) | `sudo /usr/bin/python3 -I "$PWD/falsicore.py" scan --scope system --profile deep --target-user "$USER"` |
 | Verify run | `python3 -I falsicore.py verify /path/to/exact/run` |
 | Explain run | `python3 -I falsicore.py explain /path/to/exact/run` |
+| Share-safe text | `python3 -I falsicore.py explain --share-safe /path/to/exact/run` |
 
 ## Report interpretation
 
-`SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION` means a heuristic indicator warrants review; it is not a confirmed intrusion. `INCONCLUSIVE_DUE_TO_VISIBILITY_LIMITATIONS` means material telemetry or permissions were insufficient. `NO_COMPROMISE_INDICATORS_OBSERVED` means no configured indicator was seen in completed essential checks; it is not an all-clear for the system.
+`SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION` means a heuristic indicator warrants review; it is not a confirmed intrusion. `INCONCLUSIVE_DUE_TO_VISIBILITY_LIMITATIONS` means an essential check did not fully inspect its defined target; see its `reason_codes`. Scope limits (for example other accounts in user scope) are listed per check but do not by themselves make a check incomplete. `NO_COMPROMISE_INDICATORS_OBSERVED` means no configured indicator was seen in fully inspected essential checks; it is not an all-clear for the system.
 
 `summary.json` records the rule/version, covered and missing checks, digest, and baseline identity. `private_index.json` contains raw local path/endpoint mappings; *never upload it*. An offline HTML report is constructed with escaped data and a restrictive content security policy, without JavaScript or remote assets.
 
 ## Failure and maintenance
 
 - If a module fails, its partial observations are discarded; the coverage matrix records `FAILED`.
-- Commands use fixed executable allowlists, no shells, bounded output/timeouts and best-effort child-process-group cleanup.
+- Commands use fixed executable allowlists, no shells, bounded stdout and separate bounded stderr, deadlines clamped to the scan budget, and process-group cleanup that never reaps the leader before the final group kill.
+- Progress is printed to stderr; Ctrl-C returns 130 and names the incomplete run folder.
 - Scheduling is opt-in, local, and creates no remote notifications; manually inspect disk usage and report retention.
 - Hash manifests show whether bytes match the locally recorded versions, not whether they came from a trusted origin.
 - A first-run baseline can already contain malware; comparing against it does not prove benign activity.

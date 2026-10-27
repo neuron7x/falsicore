@@ -24,17 +24,19 @@ jobs:
       - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Source manifest
-        run: sha256sum -c SOURCE_MANIFEST.sha256
-      - name: Unit and adversarial regression tests
+      - name: Source manifest is current and intact
+        run: |
+          sha256sum -c SOURCE_MANIFEST.sha256
+          python tools/build_release.py --check-manifest
+      - name: Syntax
+        run: python -m compileall -q falsicore falsicore.py tools
+      - name: Unit, adversarial and lifecycle tests
         run: python -m unittest discover -s tests -q
-      - name: Source audit
+      - name: Supplementary AST pattern audit
         run: python tools/code_audit.py . --fail-on high
       - name: Synthetic rule fixtures
         run: python -m tools.evaluate_rules
-      - name: Syntax
-        run: python -m compileall -q falsicore falsicore.py tools
-      - name: Reproducible source builds
+      - name: Reproducible builds and packaged self-test
         if: matrix.python-version == '3.13'
         shell: bash
         run: |
@@ -42,11 +44,15 @@ jobs:
           python tools/build_app.py "$RUNNER_TEMP/a.pyz"
           python tools/build_app.py "$RUNNER_TEMP/b.pyz"
           cmp "$RUNNER_TEMP/a.pyz" "$RUNNER_TEMP/b.pyz"
+          python tools/build_full.py "$RUNNER_TEMP/full-a"
+          python tools/build_full.py "$RUNNER_TEMP/full-b"
+          cmp "$RUNNER_TEMP"/full-a/*.zip "$RUNNER_TEMP"/full-b/*.zip
           python -I "$RUNNER_TEMP/a.pyz" verify-app
           python -I "$RUNNER_TEMP/a.pyz" self-test
-          python -I "$RUNNER_TEMP/a.pyz" scan --profile quick --output-base "$RUNNER_TEMP/falsicore-runs"
-          git diff --exit-code -- SOURCE_MANIFEST.sha256
-  coverage:
+          mkdir -m 700 "$RUNNER_TEMP/runs"
+          python -I "$RUNNER_TEMP/a.pyz" scan --profile quick --output-base "$RUNNER_TEMP/runs"
+          git diff --exit-code
+  static-analysis:
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
@@ -56,9 +62,15 @@ jobs:
       - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
           python-version: '3.13'
-      - name: Install pinned coverage measurement tool (CI only)
-        run: python -m pip install --disable-pip-version-check coverage==7.13.3
+      # Exact pins (no hash lock: transitive wheels differ per platform). CI only;
+      # the shipped tool has no third-party dependencies.
+      - name: Install pinned analysis tools (CI only)
+        run: python -m pip install --disable-pip-version-check coverage==7.13.3 ruff==0.15.22 bandit==1.8.6
+      - name: Correctness lint (pyflakes/bugbear subset)
+        run: python -m ruff check --select F,E9,B,PLE falsicore tools falsicore.py
+      - name: Security analyzer
+        run: python -m bandit -q -r falsicore tools falsicore.py -c pyproject.toml
       - name: Branch-aware coverage gate
         run: |
           python -m coverage run --branch --source=falsicore -m unittest discover -s tests -q
-          python -m coverage report -m --fail-under=86
+          python -m coverage report -m --fail-under=88

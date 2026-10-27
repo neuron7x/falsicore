@@ -144,17 +144,30 @@ class CollectorBoundaries(unittest.TestCase):
         self.assertEqual(self.a.findings, [])
         self.assertNotEqual(self.a.stats["processes"].get("processes_examined"), 2)
 
-    def test_network_listener_without_owner_is_partial_not_safe(self):
+    def test_network_listener_without_owner_is_never_silent(self):
         self.a.command = lambda *_a, **_k: {"status": "COMPLETED", "stdout": "tcp LISTEN 0 128 0.0.0.0:4444 0.0.0.0:*\n"}
         self.a.network()
-        self.assertEqual(self.a.coverage[-1]["status"], "PARTIAL")
+        # User scope: other accounts' sockets cannot be attributed by design.
+        self.assertEqual(self.a.coverage[-1]["scope_limits"], {"OTHER_ACCOUNTS_NOT_VISIBLE": 1})
         self.assertEqual(self.a.stats["network"]["listeners_without_process_identity"], 1)
+        # System scope should see every owner: a missing one is an incompleteness.
+        self.a.scope = "system"
+        self.a.network()
+        self.assertEqual(self.a.coverage[-1]["status"], "PARTIAL")
+        self.assertEqual(self.a.coverage[-1]["reason_codes"], {"ATTRIBUTION_UNAVAILABLE": 1})
 
     def test_file_collection_refuses_symlinks_and_reports_gap(self):
         base = self.folder / "data"
         base.mkdir()
         self.write(base / "real.service", "fixture")
         (base / "link.service").symlink_to(base / "real.service")
+        files, gap = self.a._files([base], extensions={".service"})
+        # The link's target is enumerated inside the same root: covered, not a gap.
+        self.assertFalse(gap)
+        self.assertEqual(files, [base / "real.service"])
+        outside = self.folder / "outside.service"
+        self.write(outside, "fixture")
+        (base / "escape.service").symlink_to(outside)
         files, gap = self.a._files([base], extensions={".service"})
         self.assertTrue(gap)
         self.assertEqual(files, [base / "real.service"])
@@ -250,11 +263,14 @@ class CollectorBoundaries(unittest.TestCase):
         self.a.packages()
         self.assertIn("DPKG_FILE_DRIFT", {x["rule"] for x in self.a.findings})
         self.assertEqual(self.a.findings[-1]["kind"], "CONTEXT")
-        self.assertEqual(self.a.coverage[-1]["status"], "PARTIAL")
+        # User scope cannot verify root-only files: reported as a scope limit.
+        self.assertEqual(self.a.coverage[-1]["status"], "COMPLETED")
+        self.assertIn("REQUIRES_SYSTEM_SCOPE", self.a.coverage[-1]["scope_limits"])
 
     def test_kernel_unavailable_secboot_indeterminate(self):
         self.a.kernel()
-        self.assertEqual(self.a.coverage[-1]["status"], "PARTIAL")
+        self.assertIn("REQUIRES_SYSTEM_SCOPE", self.a.coverage[-1]["scope_limits"])
+        self.assertNotIn("secure_boot_status", self.a.stats["kernel"])
         self.assertIn("kernel", self.a.stats)
 
 if __name__ == "__main__":

@@ -5,14 +5,18 @@ import argparse
 import json
 import os
 import pwd
+import shlex
 import sys
+import threading
+import time
 from pathlib import Path
 
 from . import __version__
 from .collectors import Audit
 from .profiles import PROFILES
 from . import monitor
-from .report import write_reports, verify_reports
+from . import guide
+from .report import LEGACY_SCHEMAS, SCHEMA, load_verified_summary, write_reports, verify_reports
 from .safety import create_run_directory, safe_read
 
 
@@ -36,35 +40,164 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument("folder", type=Path)
     explain = sub.add_parser("explain", help="Display readable Ukrainian conclusion from a VERIFIED report only")
     explain.add_argument("folder", type=Path)
+    explain.add_argument("--share-safe", action="store_true",
+                         help="Omit private attribution (paths, extension IDs, PIDs) for sharing with a helper")
     mon = sub.add_parser("monitor", help="Opt-in local systemd user schedule; no remote notifications")
     mon.add_argument("mode", choices=("plan", "enable", "disable", "status"))
     return p
 
 
-def explain_report(folder: Path) -> str:
+class Progress:
+    """Operator progress on stderr; stdout stays reserved for the result.
+
+    Prints phase transitions and, while a phase runs, an elapsed-time line every
+    `interval` seconds. No percentages or ETAs: collector cost is not predictable.
+    """
+
+    def __init__(self, audit: Audit | None = None, interval: float = 10.0, stream=None):
+        self.audit = audit
+        self.interval = interval
+        self.stream = stream if stream is not None else sys.stderr
+        self.enabled = self.stream is not None
+        self.started = time.monotonic()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def __call__(self, line: str) -> None:
+        # A closed or broken stderr must never abort or redirect a scan:
+        # print(file=None) would fall back to stdout, so None disables output.
+        if not self.enabled:
+            return
+        elapsed = time.monotonic() - self.started
+        try:
+            print(f"[{elapsed:6.1f}s] {line}", file=self.stream, flush=True)
+        except (OSError, ValueError):
+            self.enabled = False
+
+    def _beat(self) -> None:
+        while not self._stop.wait(self.interval):
+            phase = getattr(self.audit, "current_phase", None)
+            if phase:
+                self(f"{phase}: still running")
+
+    def __enter__(self) -> "Progress":
+        if self.interval > 0:
+            self._thread = threading.Thread(target=self._beat, name="falsicore-progress", daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1)
+
+
+def _report_list(run_dir: Path, name: str, key: str) -> list[dict]:
+    """Read back what the verified report says, not in-memory state."""
+    raw, _ = safe_read(run_dir / name, 8 * 1024 * 1024)
+    return json.loads(raw)[key] if raw else []
+
+
+def _stderr(line: str) -> None:
+    try:
+        if sys.stderr is not None:
+            print(line, file=sys.stderr, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
+def legacy_summary(folder: Path, verification: dict) -> str:
+    """Read-only view of a report written by an older FALSICORE schema.
+
+    Its file hashes verified, but its semantics differ from this version, so
+    counts are shown as recorded and nothing is re-interpreted or compared.
+    """
+    raw, _ = safe_read(folder / "summary.json", 8 * 1024 * 1024)
+    info = json.loads(raw) if raw else {}
+    lines = [f"LEGACY REPORT ({verification['schema']}, FALSICORE {info.get('tool_version', '?')}): "
+             "хеші файлів збігаються; семантику не перераховано, порівняння з новими звітами некоректне.",
+             f"Записаний висновок: {info.get('outcome', '?')}",
+             f"Записані знахідки за правилами: {info.get('finding_counts_by_rule', {})}",
+             "Записані прогалини: " + ", ".join(f"{g.get('check')}={g.get('status')}" for g in info.get("material_coverage_gaps", [])),
+             "Атрибуцію процесів/розширень ця стара схема не зберігала; її не можна відновити заднім числом.",
+             "Новий звіт з атрибуцією: ./run.sh"]
+    return "\n".join(guide.terminal_safe(x, 800) for x in lines)
+
+
+def _load_verified(folder: Path) -> tuple[dict, list[dict], list[dict]]:
     verification = verify_reports(folder)
     if not verification["verified"]:
+        if verification.get("hashes_verified") and verification.get("schema") != SCHEMA:
+            raise ValueError(f"Unsupported report schema {verification.get('schema')!r}; this version reads {SCHEMA}")
         raise ValueError("Report integrity verification failed")
-    raw, status = safe_read(folder / "summary.json", 4 * 1024 * 1024)
-    if raw is None:
-        raise ValueError(f"Summary unavailable: {status}")
-    info = json.loads(raw)
-    if info.get("schema") != "falsicore.summary.v3":
-        raise ValueError("Unsupported report schema")
-    pieces = [
-        f"ВИСНОВОК: {info['outcome']}",
-        info["outcome_explanation_ua"],
-        f"Профіль: {info['profile']}; scope: {info['scope']}",
-        f"Кількість індикаторів (НЕ доказів): {info['finding_counts_by_kind'].get('INDICATOR', 0)}",
-        f"Кількість експозицій: {info['finding_counts_by_kind'].get('EXPOSURE', 0)}",
-        f"Прогалин перевірки: {len(info['material_coverage_gaps'])}",
-    ]
-    for gap in info["material_coverage_gaps"][:12]:
-        pieces.append(f"  - {gap['check']}: {gap['status']} — {gap['reason']}")
-    pieces.extend(["ДЕТАЛІ: report.md або dashboard.html (локальний HTML без JavaScript)",
-                   "МЕЖА: live-scan не може виключити всі приховані атаки чи злам Instagram-акаунта.",
-                   f"ХЕШ СПОСТЕРЕЖЕНЬ: {info['analysis_digest_sha256']}"])
-    return "\n".join(pieces)
+    docs = {}
+    for name in ("summary.json", "findings.json", "coverage_matrix.json"):
+        raw, status = safe_read(folder / name, 8 * 1024 * 1024)
+        if raw is None:
+            raise ValueError(f"Summary unavailable: {name} {status}")
+        docs[name] = json.loads(raw)
+    info = docs["summary.json"]
+    if info.get("schema") != SCHEMA:
+        raise ValueError(f"Unsupported report schema {info.get('schema')!r}; this version reads {SCHEMA}")
+    return info, docs["findings.json"]["findings"], docs["coverage_matrix.json"]["checks"]
+
+
+def interpretation(info: dict, findings: list[dict], coverage: list[dict], share_safe: bool = False,
+                   finding_limit: int = 25) -> list[str]:
+    """Ukrainian reading of a report: what ran, what was found, what is unknown, what next.
+
+    share_safe drops private attribution (extension IDs/names, PIDs, paths,
+    source refs, digests) so the text can be shown to a helper.
+    """
+    counts = info["finding_counts_by_kind"]
+    out = [f"ВИСНОВОК: {info['outcome']}", info["outcome_explanation_ua"],
+           f"Профіль: {info['profile']}; scope: {info['scope']}; правила: {info.get('rule_set_version')}",
+           f"Індикатори (не докази): {counts.get('INDICATOR', 0)} · експозиції: {counts.get('EXPOSURE', 0)} · "
+           f"налаштування: {counts.get('HARDENING', 0)} · контекст: {counts.get('CONTEXT', 0)}",
+           "", "ЩО ПЕРЕВІРЕНО:"]
+    for c in coverage:
+        line = f"  {c['check']:<12} {c['status']:<9}"
+        if c.get("reason_codes"):
+            line += " неповнота: " + guide.codes_ua(c["reason_codes"])
+        if c.get("scope_limits"):
+            line += " | межі scope: " + guide.codes_ua(c["scope_limits"])
+        out.append(line)
+    if findings:
+        out += ["", "ЩО ЗНАЙДЕНО (впорядковано за пріоритетом перевірки):"]
+        ordered = sorted(findings, key=lambda f: (guide.rule(f["rule"])["priority"], f["rule"], f["id"]))
+        for f in ordered[:finding_limit]:
+            g = guide.rule(f["rule"])
+            out.append(f"  [{g['priority']}] {f['rule']} ({f['kind']})" + ("" if share_safe else f" {f['id']}"))
+            if not share_safe:
+                ident = guide.identity_line(f)
+                if ident:
+                    out.append(f"      про що: {ident}")
+            out.append(f"      можливі доброякісні пояснення: {g['benign']}")
+            out.append(f"      крок: {g['action']}")
+        if len(findings) > finding_limit:
+            out.append(f"  … ще {len(findings) - finding_limit}; повний перелік — report.md")
+    out += ["", "ЧОГО НЕ ВСТАНОВЛЕНО: " + "; ".join(info.get("cannot_exclude", [])[:6])]
+    if not share_safe:
+        out.append(f"ХЕШ СПОСТЕРЕЖЕНЬ: {info['analysis_digest_sha256']}")
+    else:
+        out.append("SHARE-SAFE: без шляхів, ID розширень, PID і посилань на джерела.")
+    return [guide.terminal_safe(x, 600) for x in out]
+
+
+def explain_report(folder: Path, share_safe: bool = False) -> str:
+    info, findings, coverage = _load_verified(folder)
+    return "\n".join(interpretation(info, findings, coverage, share_safe, finding_limit=350))
+
+
+def _baseline_preflight(path: Path, scope: str, profile: str, uid: int) -> None:
+    """Refuse an incompatible --compare BEFORE collecting, naming the fields."""
+    old = load_verified_summary(path)
+    expected = {"schema": SCHEMA, "tool_version": __version__, "rule_set_version": __version__,
+                "scope": scope, "profile": profile, "target_uid": uid}
+    differing = [k for k, v in expected.items() if old.get(k) != v]
+    if differing:
+        raise ValueError("Базовий звіт несумісний, поля відрізняються: " + ", ".join(differing)
+                         + ". Порівнювати різні версії правил, профілі чи scope некоректно.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -97,9 +230,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.action in ("verify", "explain"):
         try:
             if args.action == "explain":
-                print(explain_report(args.folder))
+                legacy = verify_reports(args.folder)
+                if not legacy["verified"] and legacy.get("hashes_verified") and legacy.get("schema") in LEGACY_SCHEMAS:
+                    print(legacy_summary(args.folder, legacy))
+                    return 0
+                print(explain_report(args.folder, share_safe=args.share_safe))
             else:
                 result = verify_reports(args.folder)
+                if not result["verified"] and result.get("hashes_verified") and result.get("schema") in LEGACY_SCHEMAS:
+                    print(f"LEGACY {result['schema']}: file hashes PASS; semantics of an older version are not re-verified")
+                    return 0
                 print("VERIFIED" if result["verified"] else "INVALID")
                 for row in result["entries"]:
                     print(f"{'PASS' if row['verified'] else 'FAIL'} {row['entry']}")
@@ -117,36 +257,49 @@ def main(argv: list[str] | None = None) -> int:
                 raise PermissionError("Unprivileged scan cannot select another user")
             audit = Audit(scope=args.scope, target_user=args.target_user, incident_at=args.incident_at,
                           profile=args.profile, max_seconds=args.max_seconds)
+            if args.compare is not None:
+                _baseline_preflight(args.compare, args.scope, args.profile, audit.uid)
             parent = args.output_base or (Path("/root/falsicore-runs") if args.scope == "system" else audit.home / "falsicore-runs")
             run_dir = create_run_directory(parent)
-            audit.scan()
+            progress = Progress(audit)
+            budget = args.max_seconds or PROFILES[args.profile]["duration_seconds"]
+            progress(f"FALSICORE {__version__} | profile={args.profile} | scope={args.scope} | uid={os.geteuid()} | "
+                     f"whole-scan budget={budget}s | collectors={len(PROFILES[args.profile]['checks'])}/8")
+            progress(f"private run directory: {run_dir}")
+            with progress:
+                audit.scan(progress=progress)
+            progress("analysis and report writing")
             summary = write_reports(run_dir, audit, compare_report=args.compare,
                                     auto_baseline_parent=parent if args.auto_compare else None)
+            progress("verifying own report manifest")
             if not verify_reports(run_dir)["verified"]:
                 raise RuntimeError("Own report manifest did not verify; results MUST NOT be accepted")
+            progress("done")
         except (ValueError, KeyError, PermissionError, RuntimeError, OSError) as exc:
-            print(f"SCAN ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+            _stderr(f"SCAN ERROR: {type(exc).__name__}: {exc}")
             if run_dir is not None:
-                print(f"INCOMPLETE PRIVATE RUN: {run_dir} (do not rely on contents)", file=sys.stderr)
+                _stderr(f"INCOMPLETE PRIVATE RUN: {run_dir} (do not rely on contents)")
             return 2
+        except KeyboardInterrupt:
+            # Owned probe groups were already killed by the executor.
+            _stderr("SCAN CANCELLED: скасовано оператором; звіт не сформовано.")
+            if run_dir is not None:
+                _stderr(f"INCOMPLETE PRIVATE RUN: {run_dir} (do not rely on contents)")
+            return 130
+        findings = _report_list(run_dir, "findings.json", "findings")
+        coverage = _report_list(run_dir, "coverage_matrix.json", "checks")
         print(f"⊛ FALSICORE {__version__} | {args.profile} | {args.scope}")
-        print(f"ВИСНОВОК: {summary['outcome']}")
-        print(summary["outcome_explanation_ua"])
-        print(f"ІНДИКАТОРІВ: {summary['finding_counts_by_kind'].get('INDICATOR',0)} (не доказів злому)")
-        print(f"ПОМИЛОК КОЛЕКТОРІВ: {summary.get('coverage_status_counts', {}).get('FAILED', 0)}")
-        print(f"ПЕРЕВІРОК З ОБМЕЖЕННЯМИ: {len(summary['material_coverage_gaps'])} (не кількість загроз)")
-        for finding in getattr(audit, "findings", []):
-            if finding["kind"] == "INDICATOR":
-                print("  ІНДИКАТОР:", finding["rule"], "|", finding["severity"])
-                if finding.get("evidence", {}).get("file_name"):
-                    print("    Файл:", finding["evidence"]["file_name"])
-                for location in finding.get("evidence", {}).get("locations", []):
-                    print("    Рядок:", location["line"], "|", ", ".join(location["patterns"]))
-        print("PARTIAL = межа доступних даних; FAILED = збій перевірки. Жоден статус не підтверджує злам.")
+        for line in interpretation(summary, findings, coverage, finding_limit=12):
+            print(line)
+        print("PARTIAL = ціль перевірки оглянуто не повністю; межі scope = чого цей режим не бачить за задумом. Жоден статус не підтверджує злам.")
         print(f"ЧАС СКАНУВАННЯ: {summary['stats'].get('runtime',{}).get('elapsed_ms','unknown')} мс")
-        print(f"ПОПЕРЕДНЄ ПОРІВНЯННЯ: {summary['baseline_comparison']['status']}")
+        comparison = summary["baseline_comparison"]
+        print(f"ПОПЕРЕДНЄ ПОРІВНЯННЯ: {comparison['status']}"
+              + (f" (пропущено: {comparison['skipped_candidates']})" if comparison.get("skipped_candidates") else ""))
         print(f"VERIFIED PRIVATE REPORT: {run_dir}")
         print(f"OPEN OFFLINE REPORT: {run_dir / 'dashboard.html'}")
+        print("SHARE-SAFE TEXT: python3 -I " + shlex.quote(str(Path(sys.argv[0]).absolute()))
+              + " explain --share-safe " + shlex.quote(str(run_dir)))
         print("PRIVATE: не надсилати private_index.json, токени або сирі журнали в LLM.")
         if args.strict_exit:
             return {"SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION":10,

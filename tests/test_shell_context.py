@@ -59,8 +59,11 @@ for name, (text, expected) in CASES.items():
 
 
 class ShellScopeContracts(unittest.TestCase):
-    def test_reports_heredoc_uncertainty(self):
-        self.assertIn("HEREDOC_BODY_NOT_ANALYZED", analyze("sh <<EOF\n/tmp/a\nEOF")["limitations"])
+    def test_shell_heredoc_body_is_analysed_as_code(self):
+        # A here-document fed to a shell is code: analysed, not skipped.
+        self.assertEqual(analyze("sh <<EOF\n/tmp/a\nEOF")["patterns"], ["TEMP_PATH_IN_EXECUTION"])
+        self.assertIn("HEREDOC_EXPANSION_NOT_RESOLVED", analyze("sh <<EOF\n$X\nEOF")["limitations"])
+        self.assertNotIn("HEREDOC_EXPANSION_NOT_RESOLVED", analyze("sh <<'EOF'\n$X\nEOF")["limitations"])
 
     def test_reports_variable_uncertainty(self):
         self.assertIn("EXPANSION_NOT_RESOLVED", analyze('bash "$TARGET"')["limitations"])

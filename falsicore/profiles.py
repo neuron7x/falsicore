@@ -18,14 +18,14 @@ PROFILES = {
     "standard": {
         "checks": COLLECTOR_ORDER,
         "duration_seconds": 120,
-        "journal_lines": 2500,
+        "journal_lines": 20000,
         "max_file_visits": 5000,
         "max_processes": 6000,
     },
     "deep": {
         "checks": COLLECTOR_ORDER,
         "duration_seconds": 240,
-        "journal_lines": 5000,
+        "journal_lines": 50000,
         "max_file_visits": 12000,
         "max_processes": 12000,
     },

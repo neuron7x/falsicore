@@ -196,11 +196,11 @@ class ProcessLifetimeTests(unittest.TestCase):
         """
         import sys
         script = ("import subprocess, sys\n"
-                  "subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(15)'])\n")
+                  "subprocess.Popen([sys.executable, '-I', '-c', 'import time;time.sleep(15)'])\n")
         original_killpg = os.killpg
         with patch.object(safety, "checked_executable", return_value=sys.executable), \
              patch.object(safety.os, "killpg", wraps=original_killpg) as killed:
-            result = safety.run_command("uname", ["-c", script], timeout=0.3, limit=512)
+            result = safety.run_command("uname", ["-I", "-c", script], timeout=0.3, limit=512)
         self.assertEqual(result["status"], "FAILED")
         self.assertEqual(result["error"], "timeout")
         self.assertTrue(killed.called, "orphan-grandchild process group not killed")
@@ -209,7 +209,7 @@ class ProcessLifetimeTests(unittest.TestCase):
         import sys
         with patch.object(safety, "checked_executable", return_value=sys.executable), \
              patch.object(safety.os, "killpg", wraps=os.killpg) as killed:
-            result = safety.run_command("uname", ["-c", "import sys;sys.stdout.write('x'*8000);sys.stdout.flush()"],
+            result = safety.run_command("uname", ["-I", "-c", "import sys;sys.stdout.write('x'*8000);sys.stdout.flush()"],
                                         timeout=2, limit=64)
         self.assertTrue(result["truncated"])
         self.assertEqual(result["status"], "PARTIAL")

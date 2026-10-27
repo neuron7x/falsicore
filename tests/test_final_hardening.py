@@ -18,7 +18,7 @@ from falsicore.report import verify_reports, write_reports
 class ProcessCompletionContracts(unittest.TestCase):
     def _run(self, script: str, timeout: float = 0.3, limit: int = 4096) -> dict:
         with patch.object(safety, "checked_executable", return_value=sys.executable):
-            return safety.run_command("uname", ["-c", script], timeout=timeout, limit=limit)
+            return safety.run_command("uname", ["-I", "-c", script], timeout=timeout, limit=limit)
 
     def test_stdout_eof_before_parent_exit_is_not_success(self):
         result = self._run("import os,time;os.close(1);time.sleep(5)")
@@ -57,7 +57,7 @@ class SemanticEvidenceContracts(unittest.TestCase):
             with patch("falsicore.collectors.os.geteuid", return_value=1001), \
                  patch("falsicore.collectors.os.getuid", return_value=1001):
                 audit = Audit(scope="user", target_user="nobody")
-            audit.checked("auth", "PARTIAL", "test fixture")
+            audit.checked("auth", "PARTIAL", "test fixture", reasons=["INPUT_TRUNCATED"])
             write_reports(folder, audit)
             self.assertTrue(verify_reports(folder)["verified"])
             s = json.loads((folder / "summary.json").read_text())

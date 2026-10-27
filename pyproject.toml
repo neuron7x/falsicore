@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "falsicore"
+version = "0.1.2"
+description = "Offline Linux endpoint triage and bounded Python source-pattern audit"
+requires-python = ">=3.10"
+dependencies = []
+readme = "README.md"
+authors = [{name = "FALSICORE maintainers"}]
+license = {text = "Apache-2.0"}
+keywords = ["linux", "endpoint", "triage", "forensics", "static-analysis"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: System Administrators",
+]
+
+[project.scripts]
+falsicore = "falsicore.cli:main"
+
+[tool.setuptools]
+packages = ["falsicore"]
+
+[tool.coverage.run]
+branch = true
+source = ["falsicore"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false

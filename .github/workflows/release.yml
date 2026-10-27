@@ -1,0 +1,60 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  source-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.13'
+      - name: Check tag matches source version
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, re
+          from falsicore import __version__
+          tag = os.environ['GITHUB_REF_NAME']
+          if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag) or tag != 'v'+__version__:
+              raise SystemExit('Refusing release: tag and source version mismatch')
+          PY
+      - name: Test and audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum -c SOURCE_MANIFEST.sha256
+          python -m unittest discover -s tests -q
+          python tools/code_audit.py . --fail-on high
+          python -m tools.evaluate_rules
+      - name: Deterministic package and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/build_app.py "$RUNNER_TEMP/falsicore.pyz"
+          python tools/build_app.py "$RUNNER_TEMP/independent.pyz"
+          cmp "$RUNNER_TEMP/falsicore.pyz" "$RUNNER_TEMP/independent.pyz"
+          ( cd "$RUNNER_TEMP" && sha256sum falsicore.pyz > falsicore.pyz.sha256 )
+          python -I "$RUNNER_TEMP/falsicore.pyz" verify-app
+          python -I "$RUNNER_TEMP/falsicore.pyz" self-test
+          git diff --exit-code -- SOURCE_MANIFEST.sha256
+      - name: Publish from tagged commit only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            "$RUNNER_TEMP/falsicore.pyz" \
+            "$RUNNER_TEMP/falsicore.pyz.sha256" \
+            --verify-tag --title "FALSICORE $GITHUB_REF_NAME" \
+            --notes "Experimental offline endpoint triage. No guaranteed malware detection; refer to SECURITY.md and docs/ASSURANCE.md."

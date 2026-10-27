@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from contextlib import redirect_stdout, redirect_stderr
 
-from falsicore import cli
+from falsicore import cli, monitor
 from falsicore import detectors as d
 from falsicore.collectors import Audit
 from falsicore.monitor import unit_contents, _escape_systemd_argument, enable, disable, TIMER_NAME
@@ -348,6 +348,14 @@ class CollectorProfilesTests(unittest.TestCase):
 
 
 class CLIAndMonitoringTests(unittest.TestCase):
+    def setUp(self):
+        # Unit tests must not depend on a login session existing on the test
+        # host (CI runners have no /run/user/<uid>); the env itself is tested
+        # in test_monitor_env.py.
+        patcher = patch.object(monitor, "user_bus_env", return_value=monitor.minimal_env())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_cli_doctor_lists_modes(self):
         with redirect_stdout(io.StringIO()) as output:
             self.assertEqual(cli.main(["doctor"]), 0)

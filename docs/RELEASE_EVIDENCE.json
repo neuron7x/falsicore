@@ -18,7 +18,7 @@
     "failed": 0,
     "errors": 0,
     "skipped": 0,
-    "seconds": 4.23,
+    "seconds": 5.08,
     "test_files": 31,
     "baseline_test_files_retained": true
   },
@@ -46,7 +46,7 @@
     "bandit": {
       "command": ".venv/bin/bandit -q -r falsicore tools falsicore.py -c pyproject.toml -f json",
       "exit": 0,
-      "seconds": 0.58,
+      "seconds": 0.54,
       "version": "bandit 1.8.6",
       "issues": 0,
       "skips": [
@@ -60,7 +60,7 @@
     "mypy": {
       "command": ".venv/bin/mypy --ignore-missing-imports falsicore",
       "exit": 1,
-      "seconds": 0.45,
+      "seconds": 0.43,
       "version": "mypy 1.18.2 (compiled: yes)",
       "errors_reported": 9,
       "gate": "informational, not a release gate"
@@ -68,7 +68,7 @@
     "internal_ast_audit": {
       "command": "python3 tools/code_audit.py . --fail-on high",
       "exit": 0,
-      "seconds": 0.32,
+      "seconds": 0.23,
       "medium_findings": 3,
       "high_findings": 0,
       "note": "supplementary; the single MEDIUM is the deliberate UI-callback isolation"

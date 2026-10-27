@@ -53,6 +53,7 @@ point to 0.1.3 code.
 | C-13 | — | No progress on stderr | see A-2 | — |
 | R-1 | full ZIP / `START_HERE_UA.md` | Found by clean-extraction verification: Python's `zipfile` extractor does not restore the execute bit, so `./run.sh` is refused (`unzip` keeps it). | The operator command is `bash run.sh`, which works with any extractor | clean-extraction receipt |
 | R-2 | tests (`test_failure_paths`, `test_review_regressions`) | Found by the packaged self-test: two new fixtures passed only while `TMPDIR` was outside `/tmp`. With fixtures under `/tmp` (self-test minimal env, CI) the temp-path rule masked the property under test. | Each test isolates its rule by patching the volatile-prefix table; the suite passes with `TMPDIR=/tmp`, with a home-based `TMPDIR`, and in a minimal environment | same tests |
+| R-3 | tests (`test_assurance01`, `test_v3_engineering`) | Found by hosted CI (run 40597331933): four older monitor tests mocked `run_command` but not the new A-1 runtime-directory preflight. They passed only on hosts with a login session (`/run/user/<uid>`). | The preflight is patched in those test classes and covered on its own in `test_monitor_env.py`; reproduced locally with the runtime base pointed at a missing directory | same tests |
 | L-1 | `cli.py` explain/verify | A 0.1.2 (schema v3) report was rejected as "integrity failed". | Detected as `LEGACY`: file hashes are checked, semantics are not re-derived, and it is never compared with new reports | `LegacyReports` |
 
 ## Fault injection (targeted mutation)
@@ -92,7 +93,7 @@ These are adopted practices. No compliance or certification is claimed.
 | G8 reproducibility | PASS (same environment only) | Two pyz builds and two full ZIP builds are byte-identical on this host. No cross-platform claim. |
 | G9 clean-extraction verification | see release receipt next to the ZIP | |
 | G10 authorised local workflow exercised | PASS (user scope) | standard and deep user-scope runs |
-| G11 unperformed checks identified | PASS | no system-scope run (no authorisation); hosted CI result recorded only after it is observed; coverage 89% < 100% target; no malware-corpus validation |
+| G11 unperformed checks identified | PASS | no system-scope run (no authorisation); hosted CI: the first run on the pushed commit failed (R-3) and is kept as a negative result; the run on the fix is recorded in the release receipt; coverage 89% < 100% target; no malware-corpus validation |
 
 ## Coverage
 

@@ -84,6 +84,14 @@ class ReportValidationTests(unittest.TestCase):
 
 
 class SchedulingIsolationTests(unittest.TestCase):
+    def setUp(self):
+        # Unit tests must not depend on a login session existing on the test
+        # host (CI runners have no /run/user/<uid>); the env itself is tested
+        # in test_monitor_env.py.
+        patcher = patch.object(monitor, "user_bus_env", return_value=monitor.minimal_env())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_unit_content_and_invalid_unit_path(self):
         root = Path(__file__).resolve().parents[1]
         service, timer = monitor.unit_contents(root)

@@ -6,7 +6,7 @@ it was measured in.
 
 ## Required checks
 
-1. `sha256sum -c SOURCE_MANIFEST.sha256` and `tools/build_release.py --check-manifest`.
+1. `sha256sum -c SOURCE_MANIFEST.sha256` and `tools/build_release.py --check-manifest`. The manifest covers the tool (code, tests, tools, docs, root files). The `.github/` automation files are covered by the full distribution's `SHA256SUMS`.
 2. The full suite passes, with discovered, passed, failed, errored and skipped
    counted separately. Every earlier regression-test file is kept.
 3. Branch-aware coverage of `falsicore/` is reported with its denominator and

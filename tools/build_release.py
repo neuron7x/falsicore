@@ -65,7 +65,20 @@ def current_manifest() -> bytes:
     return manifest_for({p.relative_to(ROOT).as_posix(): _read_safe_source(p) for p in source_files()})
 
 
+def is_automation_file(relative: Path) -> bool:
+    """CI/automation config: shipped and checksummed in the full distribution,
+    but outside SOURCE_MANIFEST, so automated dependency updates of workflows
+    (Dependabot) never invalidate the tool's own source manifest."""
+    return relative.as_posix() in WORKFLOW_FILES
+
+
+def automation_files() -> list[Path]:
+    return sorted((ROOT / name for name in WORKFLOW_FILES if (ROOT / name).is_file()),
+                  key=lambda p: p.relative_to(ROOT).as_posix())
+
+
 def source_files() -> list[Path]:
+    """Files covered by SOURCE_MANIFEST.sha256 and embedded in the portable app."""
     gathered = []
     for path in ROOT.rglob("*"):
         if any(chunk in IGNORED_DIRS for chunk in path.relative_to(ROOT).parts):
@@ -83,6 +96,8 @@ def source_files() -> list[Path]:
         relative = path.relative_to(ROOT)
         if not allowed_release_path(relative):
             raise ValueError("Unexpected release payload; move private/generated files outside project: " + relative.as_posix())
+        if is_automation_file(relative):
+            continue
         gathered.append(path)
     return sorted(gathered, key=lambda p: p.relative_to(ROOT).as_posix())
 

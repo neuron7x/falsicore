@@ -1,186 +1,157 @@
 # falsicore
 
-**Offline, read-only compromise triage for a single Linux workstation.**
+**Offline, read-only intrusion triage for a single Linux host, with explicit coverage.**
 
-falsicore inspects the machine it runs on and records what it saw. It also
-records what it could not see, and why. The result is a private report that
-verifies itself. It does not fix anything, send anything, or tell you the
-machine is clean.
-
-The name comes from *falsification*. Absence proves nothing: zero findings
-mean zero findings *within the inspected scope*, never "no compromise". Each
-check says one of three things about itself:
-
-- it fully inspected its defined target;
-- it fell short, with a coded reason;
-- its view was limited by the chosen scope.
+```bash
+bash run.sh                     # standard profile, current user, ~2 s
+bash run.sh --profile deep      # adds package integrity (dpkg --verify), ~60 s
+```
 
 ---
 
-## Who it is for
+## Abstract
 
-- You suspect a Linux laptop was touched (a phishing link, an unfamiliar
-  browser extension, a session you did not open). You want a first, careful
-  look before deciding whether to escalate.
-- You want that look to be **auditable**: standard library only, no network,
-  and a source tree you can read in an afternoon.
-- You respond to incidents and need a bounded triage snapshot that keeps
-  observations, exposures and visibility gaps apart.
+falsicore inspects the running host for traces of intrusion and persistence:
 
-It is **not** an antivirus, an EDR agent, a rootkit detector, or a forensic
-imaging tool.
+- processes;
+- network listeners;
+- scheduled and start-up execution;
+- browser extensions and native hosts;
+- authentication logs;
+- package integrity;
+- kernel state.
 
-## What makes it different
+It never modifies the host or contacts the network. For every finding it
+states the observation, the attribution, the benign alternatives, the
+uncertainty, and a non-destructive next step. For every check it states
+whether its defined target was fully inspected and, if not, why.
 
-- **Coverage is a measurement, not a colour.** `PARTIAL` requires a reason code
-  from a closed vocabulary, such as `TIMEOUT`, `INPUT_TRUNCATED` or
-  `PARSE_UNSUPPORTED`. Scope limits are reported separately and never hidden;
-  examples are other accounts' processes in user scope and root-only files.
-  `COMPLETED` cannot carry an incompleteness reason. The code enforces both rules.
-- **Findings explain themselves.** Each finding has:
-  - an observation;
-  - the concrete thing it is about: extension name, ID, version, enabled state
-    and granted permissions; parent process; executable hash;
-  - benign alternatives;
-  - the uncertainty;
-  - a non-destructive next step.
+The design is falsificationist. The tool never asserts "clean": the absence of
+findings is reported together with the exact scope in which they were absent.
 
-  No follow-up scripting is needed.
-- **Evidence survives the process.** Process findings capture PID, PPID, UID,
-  kernel start time, boot ID and executable identity through a pinned `/proc`
-  directory descriptor. A process that exits, or a PID that is reused, cannot
-  silently change what was recorded.
-- **Shell analysis that knows its limits.** A quote-aware lexer finds:
-  - literal execution from temporary paths;
-  - downloads piped into interpreters;
-  - process substitution;
-  - command-valued settings such as `PROMPT_COMMAND`, `alias` and `trap`.
+## Claims and how to refute them
 
-  When the program that would run cannot be resolved statically, it says so.
-  It never guesses.
-- **Package attestation instead of blind trust.** A root-owned file whose
-  content matches its dpkg record is labelled as such. Unparsed syntax in it is
-  then a stated trust assumption, not a hidden gap.
+Each claim below is enforced by code and covered by tests.
 
-## What it reads
+| # | Claim | Refuted by |
+|---|---|---|
+| C1 | The scan never writes outside its private report folder, never invokes `sudo`, never opens a socket. | Any write, privilege change or connection during `scan` (see `tests/`, `docs/THREAT_MODEL.md`). |
+| C2 | A check is `PARTIAL` **iff** it carries an incompleteness code. Scope limits are reported separately and never hidden. | A `COMPLETED` check with an incompleteness code, or a `PARTIAL` one without. The constructor raises in both cases. |
+| C3 | Identical observations yield identical finding IDs and analysis digest. Per-run attribution (PIDs, times) is excluded from identity. | Two scans of an unchanged system with differing IDs or digest. |
+| C4 | Process attribution is captured at observation time through a pinned `/proc` descriptor. A reused PID cannot be confused with the observed process. | A finding whose attribution belongs to a different process. |
+| C5 | Shell analysis never guesses: syntax it cannot resolve is reported as a limitation, not as clean and not as a finding. | Unsupported syntax that produces neither a limitation nor a correct result. |
+| C6 | A report verifies only if its hash manifest **and** a recomputation of its verdict, counts, coverage and baseline agree. | An edited report with recomputed hashes that still verifies. |
+| C7 | Two builds of one source snapshot are byte-identical, on the same platform. | Differing bytes from `tools/build_full.py` run twice. |
 
-All collection is passive. Files are read through no-follow directory
-descriptors, with size and count limits. Commands come from a fixed allowlist
-in `/usr/bin`, `/usr/sbin`, `/bin`, `/sbin`. They run without a shell, under a
-minimal environment, with per-command deadlines clamped to the whole-scan
-budget, and in their own process group, which is killed afterwards.
+## Method
 
-| Area | Sources |
-|---|---|
-| Processes | `/proc/<pid>/{stat,status,exe,cmdline}`: volatile or deleted executables, root running user paths, browser launch flags (sandbox and trust relaxation, DevTools pipe vs port) |
-| Network | `ss` snapshot: listeners and non-loopback binds, debug-port listener correlation, process attribution where visible |
-| Persistence | systemd units (system, user, vendor), cron (`/etc/cron*`, user crontab), XDG autostart, shell start-up files and the files they source, `~/.ssh/authorized_keys`, `/etc/sudoers.d` (system scope), `/etc/ld.so.preload` |
-| Browsers | Chrome, Chromium, Brave, Edge, Firefox (also Snap and Flatpak paths): extension manifests, preference state (enabled and granted permissions), Firefox add-on metadata and signatures, native-messaging hosts, managed policies |
-| Authentication | `journalctl` auth/authpriv facility, 30 days, no raw messages kept |
-| Packages | APT sources (trust overrides), dpkg metadata, `dpkg --verify` (deep profile) |
-| Kernel | taint, modules, LSMs, `aa-status`, Secure Boot (system scope), recent kernel-log sample |
+**Collection.** Read-only access uses:
 
-It does not read cookies, passwords, history, private keys or full process
-arguments.
+- no-follow directory descriptors and bounded reads;
+- a fixed command allowlist (`ss`, `journalctl`, `dpkg --verify`, `aa-status`, …);
+- no shell and a minimal environment;
+- per-command deadlines clamped to a whole-scan budget;
+- probes in their own process group, killed afterwards.
 
-## Run
+**Coverage.** Each collector reports `reason_codes`: incompleteness of its own
+target, for example `TIMEOUT`, `INPUT_TRUNCATED` or `PARSE_UNSUPPORTED`. It
+separately reports `scope_limits`: what the chosen scope cannot see by design,
+for example `OTHER_ACCOUNTS_NOT_VISIBLE` or `REQUIRES_SYSTEM_SCOPE`. Both come
+from a closed vocabulary (`docs/DETECTORS.md`).
 
-From a checkout:
+**Attribution.**
 
-```bash
-./run.sh                       # standard profile, current user, compares with your last compatible run
-./run.sh --profile quick       # faster, omits auth/packages/kernel
-./run.sh --profile deep        # adds dpkg --verify
-```
+- *Processes:* PID, PPID, UID, kernel start time, boot ID, executable identity
+  and hash, and the parent.
+- *Browser extensions:* ID, name, version, enabled state, granted and declared
+  permissions, install source, signature, linked native hosts.
+- *Packages:* `dpkg --verify` lines fall into four classes:
+  - changed content;
+  - changed configuration;
+  - missing file;
+  - unverifiable.
 
-Or as a single file, built deterministically from this tree:
+**Static shell analysis.** A quote-aware lexer recognises:
 
-```bash
-python3 tools/build_app.py ~/falsicore.pyz
-python3 -I ~/falsicore.pyz verify-app && python3 -I ~/falsicore.pyz self-test
-python3 -I ~/falsicore.pyz
-```
+- literal execution from volatile paths;
+- downloads or decoded data piped into interpreters;
+- process substitution;
+- command-valued settings (`PROMPT_COMMAND`, `alias`, `trap`).
 
-Progress goes to stderr: a phase line per collector and a heartbeat every
-10 s. The interpreted result goes to stdout. The report lands in
-`~/falsicore-runs/run-*`: mode `0700`, with `dashboard.html` (offline, no
-JavaScript, strict CSP), Markdown and JSON. Ctrl-C stops the scan, kills the
-probes it started, and names the incomplete run folder.
+It follows sourced files. A root-owned file whose content matches its dpkg
+record is marked *package-attested*: a stated trust assumption.
 
-```bash
-python3 -I falsicore.py verify  ~/falsicore-runs/run-XXXX                 # hash manifest + semantic recomputation
-python3 -I falsicore.py explain ~/falsicore-runs/run-XXXX                 # full Ukrainian interpretation
-python3 -I falsicore.py explain --share-safe ~/falsicore-runs/run-XXXX    # without paths, IDs, PIDs
-```
+**Verdict.** The outcome is one of:
 
-A system-wide pass is opt-in and explicit:
+- `SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION` (medium/high indicator present);
+- `INCONCLUSIVE_DUE_TO_VISIBILITY_LIMITATIONS` (an essential check is incomplete);
+- `NO_COMPROMISE_INDICATORS_OBSERVED` (neither of the above).
 
-```bash
-sudo /usr/bin/python3 -I "$PWD/falsicore.py" scan --scope system --target-user "$USER" --profile deep
-```
+None of them means "confirmed compromise" or "clean".
 
-## Reading the result
+## Output
+
+- Terminal: phases and a 10 s heartbeat on stderr; a Ukrainian interpretation on stdout.
+- Private report in `~/falsicore-runs/run-*` (`0700`):
+  - `dashboard.html` (offline, no JavaScript, strict CSP);
+  - `report.md`;
+  - JSON;
+  - hash manifest.
+- `explain --share-safe RUN` prints the same reading without paths, extension
+  IDs or PIDs.
 
 | Class | Meaning |
 |---|---|
-| `INDICATOR` | An observation that warrants corroboration. Not a confirmed breach. |
-| `EXPOSURE` | An accessible surface or capability. Not intent. |
-| `HARDENING` | A configuration that weakens defence. |
-| `CONTEXT` | A fact that is usually benign. |
+| `INDICATOR` | Observation requiring corroboration. Not a confirmed breach. |
+| `EXPOSURE` | Capability or surface (broad permission, listener). Not intent. |
+| `HARDENING` | Configuration that weakens defence. |
+| `CONTEXT` | Usually benign fact. |
 
-| Check state | Meaning |
+## Usage
+
+Requires Linux and Python ≥ 3.10, standard library only.
+
+| Task | Command |
 |---|---|
-| `COMPLETED` | The defined target was fully inspected. Scope limits may still be listed. |
-| `PARTIAL` | The target was not fully inspected; `reason_codes` say why. |
-| `FAILED` | The collector failed; its uncommitted observations were rolled back. |
-| `SKIPPED` | Excluded by the profile, or the budget was exhausted. |
+| Scan, current user | `bash run.sh` (`--profile quick` / `deep`) |
+| Scan, whole system (explicit) | `sudo /usr/bin/python3 -I "$PWD/falsicore.pyz" scan --scope system --target-user "$USER" --profile deep` |
+| Re-read a report | `python3 -I falsicore.pyz explain RUN` |
+| Verify a report | `python3 -I falsicore.pyz verify RUN` |
+| Verify the application | `python3 -I falsicore.pyz verify-app && python3 -I falsicore.pyz self-test` |
 
-Exit `0` means the workflow completed. It does **not** mean the machine is
-clean. With `--strict-exit`, `10` means suspicious and `11` inconclusive.
+From a source checkout, use `./run.sh [--profile …]` to scan and `python3 -I falsicore.py <command>` for everything else.
+Ctrl-C stops the scan, kills the probes it started and exits with 130.
 
-## Trust model, briefly
-
-- **Inside scope:** user-space persistence, over-privileged browser extensions
-  and native hosts, unexpected listeners, risky scheduler and start-up entries,
-  loader preload, insecure package sources.
-- **Outside scope:** a kernel- or firmware-level adversary that controls what
-  the running OS reports; deleted history; account sessions on remote
-  services; encrypted traffic contents.
-- **Report integrity** is a local hash manifest plus semantic recomputation of
-  the verdict, the counts and the baseline. It catches accidental or naive
-  tampering. It is not a signature and cannot authenticate a host that is
-  already compromised.
-
-Details: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md),
-[`docs/DETECTORS.md`](docs/DETECTORS.md), [`docs/AUDIT.md`](docs/AUDIT.md).
-
-## Verify the code yourself
+## Reproducing the evidence
 
 ```bash
 sha256sum -c SOURCE_MANIFEST.sha256 && python3 tools/build_release.py --check-manifest
-python3 -m unittest discover -s tests -q
-python3 tools/code_audit.py . --fail-on high
+python3 -m unittest discover -s tests -q                     # full suite
+python3 -m coverage run --branch --source=falsicore -m unittest discover -s tests -q
 python3 tools/build_full.py /tmp/a && python3 tools/build_full.py /tmp/b && cmp /tmp/a/*.zip /tmp/b/*.zip
 ```
 
-CI ([`verify.yml`](.github/workflows/verify.yml)) runs these on Python
-3.10–3.14 with read-only permissions and commit-pinned actions. It also runs
-ruff (correctness subset), bandit, and a branch-coverage gate.
+CI ([`verify.yml`](.github/workflows/verify.yml)) does the following:
 
-## Limits worth stating twice
+- runs the suite on Python 3.10–3.14;
+- runs ruff (correctness rules), bandit, CodeQL and a branch-coverage gate;
+- compares double builds;
+- repeats weekly, unattended.
 
-- Coverage percentages measure exercised code, not detection sensitivity. No
-  validation against a real malware corpus has been performed.
-- A live scan of a compromised system is evidence collected by that system.
-- An extension with broad permissions has a capability. Local metadata cannot
-  show whether it used that capability.
-- The whole-scan deadline is cooperative: probes are hard-bounded, but a
-  blocking read inside a collector is not interrupted.
+Defects found, fault-injection results and gates are recorded in
+[`docs/AUDIT.md`](docs/AUDIT.md). Measured values and their environment are in
+[`docs/RELEASE_EVIDENCE.json`](docs/RELEASE_EVIDENCE.json).
 
-## Status
+## Limitations
 
-`0.1.3`, alpha. Report schema `falsicore.summary.v4`. Reports from 0.1.2 are
-read as `LEGACY` and are never compared with new ones.
+- **Detection.** Heuristic detectors, never validated against a malware
+  corpus. Coverage percentages measure exercised code, not sensitivity.
+- **Trust.** A live scan trusts the running kernel. A root, kernel or firmware
+  adversary can forge every observation, including dpkg records.
+- **Remote state.** Account sessions on remote services and deleted history
+  are out of reach.
+- **Deadline.** The whole-scan deadline is cooperative: probes are
+  hard-bounded, but a blocking read inside a collector is not interrupted.
 
 ## License
 

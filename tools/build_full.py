@@ -5,7 +5,8 @@ Layout (prefix falsicore-<version>-full/):
   falsicore.pyz        portable application, byte-identical to tools/build_app.py
   run.sh               launcher that refuses a pyz whose SHA-256 differs
   START_HERE_UA.md     operator instructions (docs/OPERATOR_UA.md)
-  source/...           allowlisted repository tree incl. SOURCE_MANIFEST.sha256
+  source/...           allowlisted repository tree incl. SOURCE_MANIFEST.sha256 and
+                       .github/ workflows (covered by SHA256SUMS, not by the source manifest)
   verification/...     optional sanitized evidence (*.md, *.json, *.txt) from --evidence
   SHA256SUMS           hashes of every other member (never of itself)
 
@@ -89,6 +90,9 @@ def payload(evidence: Path | None = None) -> tuple[dict[str, tuple[bytes, int]],
     for name, raw in sources.items():
         executable = Path(name).name in ("run.sh", "falsicore.py")
         members["source/" + name] = (raw, 0o755 if executable else 0o644)
+    # Workflows ship with the source tree; SHA256SUMS covers them.
+    for path in source.automation_files():
+        members["source/" + path.relative_to(source.ROOT).as_posix()] = (source._read_safe_source(path), 0o644)
     for name, raw in _evidence(evidence).items():
         members[name] = (raw, 0o644)
     sums = "".join(f"{hashlib.sha256(raw).hexdigest()}  {name}\n" for name, (raw, _) in sorted(members.items()))

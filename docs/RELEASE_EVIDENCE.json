@@ -12,13 +12,13 @@
   },
   "suite": {
     "command": "python3 -m unittest discover -s tests",
-    "discovered": 547,
-    "ran": 547,
-    "passed": 547,
+    "discovered": 548,
+    "ran": 548,
+    "passed": 548,
     "failed": 0,
     "errors": 0,
     "skipped": 0,
-    "seconds": 3.81,
+    "seconds": 4.34,
     "test_files": 31,
     "baseline_test_files_retained": true
   },
@@ -39,14 +39,14 @@
     "ruff": {
       "command": ".venv/bin/ruff check --select F,E9,B,PLE falsicore tools falsicore.py",
       "exit": 0,
-      "seconds": 0.01,
+      "seconds": 0.03,
       "version": "ruff 0.15.22",
       "rules": "F,E9,B,PLE"
     },
     "bandit": {
       "command": ".venv/bin/bandit -q -r falsicore tools falsicore.py -c pyproject.toml -f json",
       "exit": 0,
-      "seconds": 0.48,
+      "seconds": 0.53,
       "version": "bandit 1.8.6",
       "issues": 0,
       "skips": [
@@ -60,7 +60,7 @@
     "mypy": {
       "command": ".venv/bin/mypy --ignore-missing-imports falsicore",
       "exit": 1,
-      "seconds": 0.41,
+      "seconds": 0.57,
       "version": "mypy 1.18.2 (compiled: yes)",
       "errors_reported": 10,
       "gate": "informational, not a release gate"
@@ -68,15 +68,15 @@
     "internal_ast_audit": {
       "command": "python3 tools/code_audit.py . --fail-on high",
       "exit": 0,
-      "seconds": 0.56,
-      "medium_findings": 5,
+      "seconds": 0.79,
+      "medium_findings": 6,
       "high_findings": 0,
       "note": "supplementary; the single MEDIUM is the deliberate UI-callback isolation"
     },
     "synthetic_rule_fixtures": {
       "command": "python3 -m tools.evaluate_rules",
       "exit": 0,
-      "seconds": 0.03
+      "seconds": 0.05
     }
   },
   "fault_injection": {

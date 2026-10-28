@@ -60,5 +60,21 @@ class FullDistributionContracts(unittest.TestCase):
             build_full.build(build_release.ROOT / "dist-should-not-exist")
 
 
+    def test_workflow_changes_do_not_invalidate_source_manifest(self):
+        """R-10: automated workflow bumps must not break the tool's manifest."""
+        manifest = build_release.current_manifest().decode()
+        self.assertNotIn(".github/", manifest)
+        self.assertTrue(build_release.automation_files())
+        with tempfile.TemporaryDirectory() as td:
+            result = build_full.build(Path(td) / "out")
+            with ZipFile(result["zip"]) as z:
+                prefix = z.namelist()[0].split("/", 1)[0] + "/"
+                sums = z.read(prefix + "SHA256SUMS").decode()
+                for wf in build_release.automation_files():
+                    rel = "source/" + wf.relative_to(build_release.ROOT).as_posix()
+                    self.assertIn(rel, sums)
+                    self.assertEqual(z.read(prefix + rel), wf.read_bytes())
+
+
 if __name__ == "__main__":
     unittest.main()

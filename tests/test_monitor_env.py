@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import socket
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,11 +32,15 @@ class UserBusEnvTests(unittest.TestCase):
         self.assertEqual(env["PATH"], safety.minimal_env()["PATH"])
 
     def test_shared_runtime_dir_refused(self):
-        # Any group/other bit must be refused; search-only (0o701) suffices.
+        # Any group/other bit must be refused. The mode is supplied through
+        # lstat instead of loosening real permissions on disk.
         self.runtime.mkdir(mode=0o700)
-        os.chmod(self.runtime, 0o701)
-        with self.assertRaises(PermissionError):
-            monitor.user_bus_env(self.base)
+        real = self.runtime.lstat()
+        for mode in (0o755, 0o750, 0o701):
+            shared = os.stat_result((stat.S_IFDIR | mode,) + tuple(real)[1:])
+            with self.subTest(mode=oct(mode)), patch.object(Path, "lstat", return_value=shared):
+                with self.assertRaises(PermissionError):
+                    monitor.user_bus_env(self.base)
 
     def test_symlinked_runtime_dir_refused(self):
         real = self.base / "elsewhere"

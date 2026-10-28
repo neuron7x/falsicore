@@ -31,8 +31,9 @@ class UserBusEnvTests(unittest.TestCase):
         self.assertEqual(env["PATH"], safety.minimal_env()["PATH"])
 
     def test_shared_runtime_dir_refused(self):
-        self.runtime.mkdir(mode=0o755)
-        os.chmod(self.runtime, 0o755)
+        # Group access alone must already be refused.
+        self.runtime.mkdir(mode=0o700)
+        os.chmod(self.runtime, 0o750)
         with self.assertRaises(PermissionError):
             monitor.user_bus_env(self.base)
 

@@ -1,7 +1,7 @@
 {
   "schema": "falsicore.release-evidence.v3",
   "version": "0.1.3",
-  "date_utc": "2026-10-27",
+  "date_utc": "2026-10-28",
   "environment": {
     "os": "Ubuntu 24.04.4 LTS",
     "kernel": "6.8.0-147-lowlatency",
@@ -18,7 +18,7 @@
     "failed": 0,
     "errors": 0,
     "skipped": 0,
-    "seconds": 5.08,
+    "seconds": 3.82,
     "test_files": 31,
     "baseline_test_files_retained": true
   },
@@ -39,14 +39,14 @@
     "ruff": {
       "command": ".venv/bin/ruff check --select F,E9,B,PLE falsicore tools falsicore.py",
       "exit": 0,
-      "seconds": 0.01,
+      "seconds": 0.03,
       "version": "ruff 0.15.22",
       "rules": "F,E9,B,PLE"
     },
     "bandit": {
       "command": ".venv/bin/bandit -q -r falsicore tools falsicore.py -c pyproject.toml -f json",
       "exit": 0,
-      "seconds": 0.54,
+      "seconds": 0.51,
       "version": "bandit 1.8.6",
       "issues": 0,
       "skips": [
@@ -60,7 +60,7 @@
     "mypy": {
       "command": ".venv/bin/mypy --ignore-missing-imports falsicore",
       "exit": 1,
-      "seconds": 0.43,
+      "seconds": 0.52,
       "version": "mypy 1.18.2 (compiled: yes)",
       "errors_reported": 9,
       "gate": "informational, not a release gate"
@@ -68,7 +68,7 @@
     "internal_ast_audit": {
       "command": "python3 tools/code_audit.py . --fail-on high",
       "exit": 0,
-      "seconds": 0.23,
+      "seconds": 0.21,
       "medium_findings": 3,
       "high_findings": 0,
       "note": "supplementary; the single MEDIUM is the deliberate UI-callback isolation"
@@ -76,7 +76,7 @@
     "synthetic_rule_fixtures": {
       "command": "python3 -m tools.evaluate_rules",
       "exit": 0,
-      "seconds": 0.04
+      "seconds": 0.03
     }
   },
   "fault_injection": {

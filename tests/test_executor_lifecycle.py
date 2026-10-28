@@ -52,10 +52,12 @@ class ExecutorLifecycleTests(unittest.TestCase):
         self.assertFalse(result["residual_killed"])
 
     def test_signal_death_is_labelled(self):
-        result = run_py("import os,signal;os.kill(os.getpid(),signal.SIGSEGV)")
+        # SIGTERM terminates without a core dump; a dumping signal (SIGSEGV) can
+        # outlast the deadline on hosts with a slow core handler (seen on CI).
+        result = run_py("import os,signal;os.kill(os.getpid(),signal.SIGTERM)")
         self.assertEqual(result["status"], "FAILED")
-        self.assertEqual(result["exit"], -signal.SIGSEGV)
-        self.assertEqual(result["error"], "signal:SIGSEGV")
+        self.assertEqual(result["exit"], -signal.SIGTERM)
+        self.assertEqual(result["error"], "signal:SIGTERM")
 
     def test_stderr_is_separate_from_parsed_stdout(self):
         result = run_py("import sys;sys.stdout.write('data');sys.stderr.write('Hint: noise')")

@@ -1608,18 +1608,31 @@ class Audit:
         if self.profile == "deep":
             verify = self.command("dpkg", ["--verify"], timeout=110, limit=2*1024*1024)
             if verify["status"] in ("COMPLETED", "PARTIAL") or (verify["exit"] in (1, 2) and bool(verify["stdout"])):
-                affected = [line for line in verify["stdout"].splitlines() if line.strip()]
-                self.stats["package_integrity"] = {"changed_file_records": len(affected), "unverified_after_cap": verify["truncated"], "command_exit": verify["exit"]}
-                if affected:
-                    self.finding("DPKG_FILE_DRIFT", "low", "Installed files differ from package metadata; config changes can be legitimate",
-                                 "dpkg://verify", {"record_count": len(affected)}, kind="CONTEXT")
+                review = d.dpkg_verify_review(verify["stdout"])
+                self.stats["package_integrity"] = {**review, "unverified_after_cap": verify["truncated"],
+                                                   "command_exit": verify["exit"]}
+                changed_other = review["content_changed_other_files"]
+                if changed_other:
+                    # Package-owned non-configuration content differs from its record.
+                    self.finding("DPKG_FILE_DRIFT", "medium",
+                                 "Installed non-configuration files differ from package checksums", "dpkg://verify",
+                                 {"content_changed_other_files": changed_other,
+                                  "content_changed_conffiles": review["content_changed_conffiles"]})
+                elif review["content_changed_conffiles"]:
+                    self.finding("DPKG_CONFFILE_CHANGED", "low", "Configuration files differ from their packaged versions",
+                                 "dpkg://verify", {"content_changed_conffiles": review["content_changed_conffiles"]},
+                                 kind="CONTEXT")
+                if review["missing_files"]:
+                    self.finding("DPKG_FILES_MISSING", "low", "Files recorded by installed packages are absent on disk",
+                                 "dpkg://verify", {"missing_files": review["missing_files"],
+                                                   "missing_by_prefix": review["missing_by_prefix"]}, kind="CONTEXT")
+                if review["unverifiable"]:
+                    gaps.add("REQUIRES_SYSTEM_SCOPE" if self.scope == "user" else "PERMISSION_DENIED", review["unverifiable"])
             else:
                 self.command_gap(verify, gaps)
                 self.stats["package_integrity"] = {"status": verify["status"], "error": verify["error"]}
             if verify["truncated"]:
                 gaps.add("INPUT_TRUNCATED")
-            if self.scope != "system":
-                gaps.add("REQUIRES_SYSTEM_SCOPE")  # root-only files are not verified
             detail = "APT source policy + dpkg --verify. Drift is not malware attribution; tracked package content only"
         else:
             gaps.add("NOT_IN_PROFILE")

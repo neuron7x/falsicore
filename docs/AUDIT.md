@@ -56,6 +56,8 @@ point to 0.1.3 code.
 | R-3 | tests (`test_assurance01`, `test_v3_engineering`) | Found by hosted CI (run 40597331933): four older monitor tests mocked `run_command` but not the new A-1 runtime-directory preflight. They passed only on hosts with a login session (`/run/user/<uid>`). | The preflight is patched in those test classes and covered on its own in `test_monitor_env.py`; reproduced locally with the runtime base pointed at a missing directory | same tests |
 | R-4 | `tests/test_executor_lifecycle.py` | Found by hosted CI (run 40643424328, Python 3.12 job): the signal-label test used SIGSEGV. The runner's core-dump handler outlasted the 3 s deadline, so the probe was killed by the timeout (`-9`). The executor behaved correctly; the fixture was environment-dependent. | SIGTERM (no core dump) exercises the same contract | same test |
 | R-5 | `tests/test_monitor_env.py` | CodeQL `py/overly-permissive-file` flagged the fixture `chmod` (modes `0o755`, `0o750` and `0o701` were each flagged in turn). | The fixture no longer loosens permissions on disk: the shared modes are supplied through `lstat`, and the same refusal is tested for all three | same test |
+| R-6 | `bundle.py` main | Found while running the delivered tool: `bash run.sh --profile deep` (as documented) failed with an argparse error, because the portable entry applied the default `scan` only when there were no arguments. | Leading options imply a default user-scope `scan`; explicit actions are unchanged | `test_launcher_options_default_to_user_scan` |
+| R-7 | `collectors.py` packages, `detectors.dpkg_verify_review` | Found on the host deep scan: every `dpkg --verify` line was counted as "changed". 15 763 records were reported as drift, but they were 15 729 missing files (modules of two removed kernels), 25 files unreadable without root, and 9 changed conffiles. | Lines are classified by the md5 column and the conffile marker: non-config content change → `DPKG_FILE_DRIFT` (INDICATOR, P1); conffile change → `DPKG_CONFFILE_CHANGED` (CONTEXT); missing → `DPKG_FILES_MISSING` (CONTEXT, path prefixes); unverifiable → scope limit (user) or `PERMISSION_DENIED` (system) | `test_dpkg_verify_line_classes`, `test_missing_files_are_context_not_drift`, system-scope tests |
 | L-1 | `cli.py` explain/verify | A 0.1.2 (schema v3) report was rejected as "integrity failed". | Detected as `LEGACY`: file hashes are checked, semantics are not re-derived, and it is never compared with new reports | `LegacyReports` |
 
 ## Fault injection (targeted mutation)
@@ -87,7 +89,7 @@ These are adopted practices. No compliance or certification is claimed.
 |---|---|---|
 | G1 host and user work preserved | PASS | Writes were limited to: the repository working copy; new private run folders (`~/falsicore-runs/run-*` and the agent scratch folder); `.falsicore-audit/`; disposable `/tmp/fc-attr-*` test copies, which are removed after each test. Nothing was deleted from `~/falsicore-runs`. There was no browser, shell, service, package or extension change. |
 | G2 release-blocking defects fixed | PASS | B-1, B-4, B-6 and every major finding above. A-8 stays a documented limitation. |
-| G3 complete retained suite passes | PASS | 544 discovered / 544 passed / 0 failed / 0 errors / 0 skipped. All 24 baseline test files are kept; 31 now. |
+| G3 complete retained suite passes | PASS | 547 discovered / 547 passed / 0 failed / 0 errors / 0 skipped. All 24 baseline test files are kept; 31 now. |
 | G4 positive/negative/failure tests for changed logic | PASS | per-row tests; `test_failure_paths.py` |
 | G5 progress, cancellation, deadlines via real launcher | PASS | `./run.sh` progress and heartbeat. Live SIGINT during `dpkg --verify` (a deep profile run under this account): the scan exited 40 ms later, the owned `dpkg` child was killed, exit 130. |
 | G6 attribution retained | PASS | Live test with a disposable process. A historical PID from a 0.1.2 run **cannot** be reconstructed: 0.1.2 did not record it. |
@@ -101,8 +103,8 @@ These are adopted practices. No compliance or certification is claimed.
 
 Branch-aware coverage of runtime package `falsicore/`, with no exclusions:
 
-- statements: 3015, of which 2744 covered;
-- branches: 1368, of which 1173 covered;
+- statements: 3045, of which 2773 covered;
+- branches: 1386, of which 1190 covered;
 - overall: **89%**.
 
 Weakest module: `guide.py` (67%, rendering branches for rare evidence shapes),

@@ -455,5 +455,38 @@ class LegacyReports(unittest.TestCase):
                 self.assertEqual(cli.main(["explain", str(run)]), 2)
 
 
+class PackageVerifyAndLauncher(unittest.TestCase):
+    """R-7: dpkg --verify line classes; R-6: launcher options imply a scan."""
+
+    def test_dpkg_verify_line_classes(self):
+        out = ("??5?????? c /etc/a.conf\n??5?????? /usr/bin/b\nmissing     /lib/modules/6.8.0-1/x.ko\n"
+               "missing   c /etc/gone.conf\n????????? /usr/lib/secret\nweird line\n")
+        r = detectors.dpkg_verify_review(out)
+        self.assertEqual((r["content_changed_conffiles"], r["content_changed_other_files"], r["missing_files"],
+                          r["unverifiable"], r["unparsed_lines"]), (1, 1, 2, 1, 1))
+        self.assertEqual(r["missing_by_prefix"], {"/etc/gone.conf": 1, "/lib/modules/6.8.0-1": 1})
+
+    def test_missing_files_are_context_not_drift(self):
+        audit = make_audit(Path("/nonexistent"), profile="deep")
+        audit._files = lambda *a, **k: ([], False)
+        audit.command = lambda *a, **k: {"status": "FAILED", "stdout": "missing     /lib/modules/old/x.ko\n" * 3,
+                                         "stderr": "", "exit": 1, "truncated": False, "error": ""}
+        audit.packages()
+        self.assertEqual([(f["rule"], f["kind"]) for f in audit.findings], [("DPKG_FILES_MISSING", "CONTEXT")])
+        self.assertEqual(audit.coverage[-1]["scope_limits"], {})
+
+    def test_launcher_options_default_to_user_scan(self):
+        from falsicore import bundle
+        seen = []
+        with patch.object(bundle, "read_verified_bundle", return_value={}), \
+             patch("falsicore.cli.main", side_effect=lambda a: seen.append(a) or 0):
+            bundle.main(["--profile", "deep"])
+            bundle.main([])
+            bundle.main(["explain", "/x"])
+        self.assertEqual(seen[0], ["scan", "--scope", "user", "--auto-compare", "--profile", "deep"])
+        self.assertEqual(seen[1], ["scan", "--scope", "user", "--auto-compare"])
+        self.assertEqual(seen[2], ["explain", "/x"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,8 @@ Examples of detector IDs:
 | `POWERFUL_BROWSER_EXTENSION` | powerful browser extension API/host access | legitimate extension with broad permissions |
 | `REMOTE_ACCESS_PORT_EXPOSED` | remote-access listener on a non-loopback bind | intentionally enabled SSH/RDP/VNC |
 | `INSECURE_APT_REPOSITORY_SETTING` | APT source override of signature trust | exceptional test repository |
+| `DPKG_FILE_DRIFT` | non-configuration package file differs from its dpkg md5 (deep) | local patch, interrupted upgrade |
+| `DPKG_CONFFILE_CHANGED` / `DPKG_FILES_MISSING` | edited conffiles / recorded files absent (deep, context) | admin configuration / leftover modules of removed kernels |
 
 **Coverage:** quick profile intentionally omits authentication, package and kernel history. Standard/deep are snapshots rather than continuous EDR. Remote account sessions, encrypted communication contents, advanced rootkits and full disk provenance are out of scope.
 

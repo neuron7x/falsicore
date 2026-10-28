@@ -262,10 +262,10 @@ class CollectorBoundaries(unittest.TestCase):
                                              "exit": 1, "error": "", "truncated": False}
         self.a.packages()
         self.assertIn("DPKG_FILE_DRIFT", {x["rule"] for x in self.a.findings})
-        self.assertEqual(self.a.findings[-1]["kind"], "CONTEXT")
-        # User scope cannot verify root-only files: reported as a scope limit.
+        # Non-configuration drift is an indicator to corroborate, not a confirmed compromise.
+        self.assertEqual(self.a.findings[-1]["kind"], "INDICATOR")
+        self.assertEqual(self.a.findings[-1]["classification"], "SUSPICIOUS_UNCONFIRMED")
         self.assertEqual(self.a.coverage[-1]["status"], "COMPLETED")
-        self.assertIn("REQUIRES_SYSTEM_SCOPE", self.a.coverage[-1]["scope_limits"])
 
     def test_kernel_unavailable_secboot_indeterminate(self):
         self.a.kernel()

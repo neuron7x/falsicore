@@ -177,13 +177,16 @@ class JournalAndPackageFixtures(unittest.TestCase):
             path.write_text("Types: deb\nAllow-Insecure: yes\n")
             audit = make_audit(Path(td), profile="deep")
             audit._files = lambda *a, **kw: ([path], False)
-            audit.command = lambda *a, **k: {"status": "FAILED", "stdout": "??5?????? c /etc/example.conf\n",
+            audit.command = lambda *a, **k: {"status": "FAILED", "stdout": "??5?????? c /etc/example.conf\n"
+                                                                            "????????? /usr/lib/root-only\n",
                                                   "exit": 1, "truncated": False, "error": ""}
             audit.packages()
             self.assertIn("REQUIRES_SYSTEM_SCOPE", audit.coverage[-1]["scope_limits"])
             self.assertEqual(audit.stats["repos"]["insecure_source_files"], 1)
             self.assertIn("INSECURE_APT_REPOSITORY_SETTING", {f["rule"] for f in audit.findings})
-            self.assertIn("DPKG_FILE_DRIFT", {f["rule"] for f in audit.findings})
+            # A changed conffile is context; the unreadable file is a user-scope limit.
+            self.assertIn("DPKG_CONFFILE_CHANGED", {f["rule"] for f in audit.findings})
+            self.assertNotIn("DPKG_FILE_DRIFT", {f["rule"] for f in audit.findings})
 
     def test_absent_journal_is_inconclusive(self):
         with tempfile.TemporaryDirectory() as td:

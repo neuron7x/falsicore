@@ -37,9 +37,12 @@ in `docs/AUDIT.md`.
 - **Release.** One deterministic full ZIP (`tools/build_full.py`) with its hash
   outside the archive; builds never edit the tree; constant archive prefix;
   CodeQL pinned to a commit; CI adds ruff, bandit and a coverage gate (88%).
-- **Tests.** 431 → 544. Four lifecycle tests that failed (and one that passed
+- **Tests.** 431 → 547. Four lifecycle tests that failed (and one that passed
   vacuously) on hosts with non-ASCII `.pth` files now isolate their child
   interpreters. No previous test file was removed.
+- `dpkg --verify` output is classified (content change vs conffile vs missing vs
+  unverifiable); previously all lines counted as drift. Launcher options such as
+  `bash run.sh --profile deep` imply a default scan.
 - Report schema `falsicore.summary.v4`.
 
 ## 0.1.2 — 2026-10-27

@@ -190,6 +190,36 @@ def browser_flag_review(argv: list[str]) -> dict:
             "hypothesis": "; ".join(parts) or "browser launched with review-worthy flags"}
 
 
+def dpkg_verify_review(output: str) -> dict:
+    """Classify `dpkg --verify` lines: '??5??????' (md5 differs), 'missing',
+    or '?' in the md5 column (could not be checked, e.g. unreadable as user).
+
+    Only the third column carries a result in current dpkg; a 'c' marks a
+    conffile. Paths are reduced to their first three components.
+    """
+    review = {"content_changed_conffiles": 0, "content_changed_other_files": 0,
+              "missing_files": 0, "unverifiable": 0, "unparsed_lines": 0}
+    prefixes: dict[str, int] = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        conf = len(parts) >= 3 and parts[1] == "c"
+        path = parts[-1]
+        if parts[0] == "missing":
+            review["missing_files"] += 1
+            prefix = "/" + "/".join(path.strip("/").split("/")[:3])
+            prefixes[prefix] = prefixes.get(prefix, 0) + 1
+        elif len(parts[0]) == 9 and parts[0][2] == "5":
+            review["content_changed_conffiles" if conf else "content_changed_other_files"] += 1
+        elif len(parts[0]) == 9 and parts[0][2] == "?":
+            review["unverifiable"] += 1
+        else:
+            review["unparsed_lines"] += 1
+    review["missing_by_prefix"] = dict(sorted(prefixes.items(), key=lambda kv: (-kv[1], kv[0]))[:10])
+    return review
+
+
 def endpoint_class(endpoint: str) -> str:
     """Address classification without DNS resolution or contacting endpoint."""
     ep = endpoint.strip()

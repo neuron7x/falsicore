@@ -144,7 +144,14 @@ def main(argv: list[str] | None = None) -> int:
         if args in (["--help"], ["-h"]):
             print("Portable commands: verify-app | self-test | export-source NEW_DIRECTORY")
         from .cli import main as cli_main
-        return cli_main(args or ["scan", "--scope", "user", "--auto-compare"])
+        # No action, or options only (e.g. "--profile deep"): the default is a
+        # user-scope scan, so documented launcher options work unchanged.
+        default = ["scan", "--scope", "user", "--auto-compare"]
+        if not args:
+            return cli_main(default)
+        if args[0].startswith("-") and args[0] not in ("-h", "--help", "--version"):
+            return cli_main(default + args)
+        return cli_main(args)
     except KeyboardInterrupt:
         print("Скасовано. Незавершений звіт не є результатом перевірки.", file=sys.stderr)
         return 130

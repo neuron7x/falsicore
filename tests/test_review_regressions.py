@@ -460,10 +460,11 @@ class PackageVerifyAndLauncher(unittest.TestCase):
 
     def test_dpkg_verify_line_classes(self):
         out = ("??5?????? c /etc/a.conf\n??5?????? /usr/bin/b\nmissing     /lib/modules/6.8.0-1/x.ko\n"
-               "missing   c /etc/gone.conf\n????????? /usr/lib/secret\nweird line\n")
+               "missing   c /etc/gone.conf\n????????? /usr/lib/secret\nweird line\n"
+               "missing     /etc/private/key (Permission denied)\n")
         r = detectors.dpkg_verify_review(out)
         self.assertEqual((r["content_changed_conffiles"], r["content_changed_other_files"], r["missing_files"],
-                          r["unverifiable"], r["unparsed_lines"]), (1, 1, 2, 1, 1))
+                          r["unverifiable"], r["unparsed_lines"]), (1, 1, 2, 2, 1))
         self.assertEqual(r["missing_by_prefix"], {"/etc/gone.conf": 1, "/lib/modules/6.8.0-1": 1})
 
     def test_missing_files_are_context_not_drift(self):

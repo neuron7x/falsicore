@@ -206,7 +206,10 @@ def dpkg_verify_review(output: str) -> dict:
             continue
         conf = len(parts) >= 3 and parts[1] == "c"
         path = parts[-1]
-        if parts[0] == "missing":
+        if line.rstrip().endswith("(Permission denied)"):
+            # "missing <path> (Permission denied)": not absent, just unreadable here.
+            review["unverifiable"] += 1
+        elif parts[0] == "missing":
             review["missing_files"] += 1
             prefix = "/" + "/".join(path.strip("/").split("/")[:3])
             prefixes[prefix] = prefixes.get(prefix, 0) + 1

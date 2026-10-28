@@ -58,6 +58,7 @@ point to 0.1.3 code.
 | R-5 | `tests/test_monitor_env.py` | CodeQL `py/overly-permissive-file` flagged the fixture `chmod` (modes `0o755`, `0o750` and `0o701` were each flagged in turn). | The fixture no longer loosens permissions on disk: the shared modes are supplied through `lstat`, and the same refusal is tested for all three | same test |
 | R-6 | `bundle.py` main | Found while running the delivered tool: `bash run.sh --profile deep` (as documented) failed with an argparse error, because the portable entry applied the default `scan` only when there were no arguments. | Leading options imply a default user-scope `scan`; explicit actions are unchanged | `test_launcher_options_default_to_user_scan` |
 | R-7 | `collectors.py` packages, `detectors.dpkg_verify_review` | Found on the host deep scan: every `dpkg --verify` line was counted as "changed". 15 763 records were reported as drift, but they were 15 729 missing files (modules of two removed kernels), 25 files unreadable without root, and 9 changed conffiles. | Lines are classified by the md5 column and the conffile marker: non-config content change → `DPKG_FILE_DRIFT` (INDICATOR, P1); conffile change → `DPKG_CONFFILE_CHANGED` (CONTEXT); missing → `DPKG_FILES_MISSING` (CONTEXT, path prefixes); unverifiable → scope limit (user) or `PERMISSION_DENIED` (system) | `test_dpkg_verify_line_classes`, `test_missing_files_are_context_not_drift`, system-scope tests |
+| R-8 | `detectors.dpkg_verify_review` | Found on the host deep scan after R-7: 36 lines of the form `missing <path> (Permission denied)` were counted as missing files under the prefix `/denied)`. | These lines are now classified as unverifiable (a user-scope limit) | `test_dpkg_verify_line_classes` |
 | L-1 | `cli.py` explain/verify | A 0.1.2 (schema v3) report was rejected as "integrity failed". | Detected as `LEGACY`: file hashes are checked, semantics are not re-derived, and it is never compared with new reports | `LegacyReports` |
 
 ## Fault injection (targeted mutation)
@@ -103,8 +104,8 @@ These are adopted practices. No compliance or certification is claimed.
 
 Branch-aware coverage of runtime package `falsicore/`, with no exclusions:
 
-- statements: 3045, of which 2773 covered;
-- branches: 1386, of which 1190 covered;
+- statements: 3047, of which 2775 covered;
+- branches: 1388, of which 1192 covered;
 - overall: **89%**.
 
 Weakest module: `guide.py` (67%, rendering branches for rare evidence shapes),

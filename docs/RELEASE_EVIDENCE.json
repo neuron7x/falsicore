@@ -18,17 +18,17 @@
     "failed": 0,
     "errors": 0,
     "skipped": 0,
-    "seconds": 3.8,
+    "seconds": 3.81,
     "test_files": 31,
     "baseline_test_files_retained": true
   },
   "coverage": {
     "scope": "falsicore/ runtime package, branch-aware, no exclusions",
-    "num_statements": 3045,
-    "covered_lines": 2773,
+    "num_statements": 3047,
+    "covered_lines": 2775,
     "missing_lines": 272,
-    "num_branches": 1386,
-    "covered_branches": 1190,
+    "num_branches": 1388,
+    "covered_branches": 1192,
     "missing_branches": 196,
     "excluded_lines": 0,
     "percent_display": "89",
@@ -60,7 +60,7 @@
     "mypy": {
       "command": ".venv/bin/mypy --ignore-missing-imports falsicore",
       "exit": 1,
-      "seconds": 0.48,
+      "seconds": 0.41,
       "version": "mypy 1.18.2 (compiled: yes)",
       "errors_reported": 10,
       "gate": "informational, not a release gate"
@@ -68,8 +68,8 @@
     "internal_ast_audit": {
       "command": "python3 tools/code_audit.py . --fail-on high",
       "exit": 0,
-      "seconds": 0.39,
-      "medium_findings": 4,
+      "seconds": 0.56,
+      "medium_findings": 5,
       "high_findings": 0,
       "note": "supplementary; the single MEDIUM is the deliberate UI-callback isolation"
     },

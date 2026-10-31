@@ -60,6 +60,33 @@ jobs:
           mkdir -m 700 "$RUNNER_TEMP/runs"
           python -I "$RUNNER_TEMP/a.pyz" scan --profile quick --output-base "$RUNNER_TEMP/runs"
           git diff --exit-code
+  mutation-diff:
+    # New or changed runtime lines must arrive with tests that notice when they are wrong.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Install coverage and Hypothesis (CI only)
+        run: python -m pip install --disable-pip-version-check coverage==7.13.3 hypothesis==6.135.26
+      - name: Record per-test coverage contexts
+        run: python tools/mutate.py --coverage
+      - name: Mutants on changed lines must all be killed
+        run: python tools/mutate.py --diff "origin/${{ github.base_ref }}" --workers 2 --timeout 120 --json mutation-diff.json --markdown mutation-diff.md
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: mutation-diff-${{ github.sha }}
+          path: |
+            mutation-diff.json
+            mutation-diff.md
+          if-no-files-found: ignore
   static-analysis:
     runs-on: ubuntu-24.04
     timeout-minutes: 12

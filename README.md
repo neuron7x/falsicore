@@ -44,6 +44,7 @@ Each claim below is enforced by code and covered by tests.
 | C6 | A report verifies only if its hash manifest **and** a recomputation of its verdict, counts, coverage and baseline agree. | An edited report with recomputed hashes that still verifies. |
 | C7 | Two builds of one source snapshot are byte-identical, on the same platform. | Differing bytes from `tools/build_full.py` run twice. |
 | C8 | Every rule detects the artifact shape it targets and stays silent on that shape's benign twin, on a hermetic fixture host whose unplanted state reaches `NO_COMPROMISE_INDICATORS_OBSERVED`. | A planted scenario in `tools/validity.py` that is missed, a benign twin that alarms, or a rule with no positive scenario (`docs/DETECTION_VALIDITY.json`). This is recall on synthetic shapes, not sensitivity to real malware. |
+| C9 | Every runtime line changed by a pull request arrives with tests that fail when the line is wrong: no mutant on a changed line survives (`tools/mutate.py --diff`). | A surviving or untested mutant on a changed line (CI job `mutation-diff`). The weekly whole-package table (`docs/MUTATION.md`) is the open work list, not a claim. |
 
 ## Method
 

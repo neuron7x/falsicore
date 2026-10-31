@@ -9,7 +9,6 @@ import re
 from typing import Any, Iterable
 
 MAX_JSON_BYTES = 1_048_576
-MAX_TEXT_BYTES = 131_072
 
 SUSPICIOUS_PATHS = ("/tmp/", "/var/tmp/", "/dev/shm/")
 BAD_BROWSER_FLAGS = (
@@ -97,7 +96,7 @@ def match_pattern_host(pattern: str) -> str | None:
     scheme, rest = pattern.split("://", 1)
     if scheme not in ("*", "https", "http", "file", "ftp", "ws", "wss"):
         return None
-    host = rest.split("/", 1)[0].lower()
+    host = rest.split("/", 1)[0].lower()   # no mutate: element 0 is the same for any maxsplit >= 1
     if not host or not all(ch.isalnum() or ch in "*.-" for ch in host):
         return None
     return host
@@ -299,13 +298,13 @@ def parse_ss(text: str) -> list[dict]:
         local, remote = bits[4], bits[5] if len(bits) > 5 else ""
         if proto not in ("tcp", "udp", "tcp6", "udp6"):
             continue
-        port = local.rsplit(":", 1)[-1]
+        port = local.rsplit(":", 1)[-1]   # no mutate: the last element is the same for any maxsplit >= 1
         if not port.isdigit():
             port = "?"
         out.append({
             "proto": proto, "state": state, "local_class": endpoint_class(local),
             "local_port": port, "remote_class": endpoint_class(remote),
-            "remote_id": digest(remote) if remote and remote not in ("*:*", "0.0.0.0:*") else None,
+            "remote_id": digest(remote) if remote and endpoint_class(remote) != "wildcard" else None,
             "has_process_info": "pid=" in line,
             "pids": sorted({int(v) for v in re.findall(r"\bpid=(\d+)", line)}),
         })
@@ -366,7 +365,7 @@ def baseline_diff(old: dict, new: dict) -> dict:
     return result
 
 
-def redact_untrusted_text(text: str, limit: int = 250) -> str:
+def redact_untrusted_text(text: str) -> str:
     """No raw untrusted text used in exported findings. Output an identifier only."""
     return f"UNTRUSTED_TEXT[sha256={digest(text, 32)},length={len(text)}]"
 

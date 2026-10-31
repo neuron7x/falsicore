@@ -42,7 +42,9 @@ MAX_TOKENS = 8192
 PATTERN_CODES = frozenset({
     "TEMP_PATH_IN_EXECUTION", "REMOTE_SCRIPT_PIPELINE",
     "BASE64_DECODE_EXECUTION_CONTEXT", "RISKY_EXECUTION_FLAG",
+    "NETWORK_REDIRECTION",
 })
+NETWORK_DEVICE_PREFIXES = ("/dev/tcp/", "/dev/udp/")
 LIMITATION_CODES = frozenset({
     "TOKEN_LIMIT", "UNTERMINATED_HEREDOC", "UNPARSED_QUOTING", "EXPANSION_NOT_RESOLVED",
     "INLINE_INTERPRETER_CODE_NOT_ANALYZED", "MISSING_SHELL_COMMAND_OPERAND",
@@ -471,6 +473,7 @@ class _Analysis:
         self.gaps: set[str] = set()
         self.sourced: list[str] = []
         self.emits: set[str] = set()   # source classes of commands (for substitutions)
+        self._sub_emits: set[str] = set()  # source classes of the current command's own $(...)
 
     def found(self, rules: set[str], line: int) -> None:
         if rules:
@@ -489,16 +492,29 @@ class _Analysis:
             if word.expands:
                 self.gaps.add("EXPANSION_NOT_RESOLVED")
             if name == "PROMPT_COMMAND":
+                # The value is executed at every prompt: code that arrives in it
+                # from a download or a decode is code from that source.
+                self._code_from(self._sub_emits, word.line)
                 self.nested(value, word.line)
             elif _temporary(value):
                 self.found({"TEMP_PATH_IN_EXECUTION"}, word.line)
 
     def command(self, cmd: Command) -> tuple[str, bool]:
         """Analyse one simple command; return (output source class, reads code from stdin)."""
+        sub_emits: set[str] = set()
         for w in cmd.words:
             for body in w.subs:
                 sub = self.nested(body, w.line)
-                self.emits.update(sub.emits)
+                sub_emits.update(sub.emits)
+        self.emits.update(sub_emits)
+        self._sub_emits = sub_emits
+        # A redirection to /dev/tcp or /dev/udp opens a socket from the shell
+        # itself (reverse-shell idiom: `bash -i >& /dev/tcp/H/P 0>&1`,
+        # `exec 3<>/dev/tcp/H/P`). Checked before wrappers are stripped, since
+        # `exec` leaves no command word behind.
+        for _op, target in cmd.redirects:
+            if isinstance(target, Word) and target.text.startswith(NETWORK_DEVICE_PREFIXES):
+                self.found({"NETWORK_REDIRECTION"}, target.line)
         procsub_emits = []
         for doc in cmd.procsubs:
             sub = self.nested(doc.body or "", doc.line)
@@ -557,6 +573,8 @@ class _Analysis:
         if name == "eval":
             if any(w.expands for w in args):
                 self.gaps.add("EXPANSION_NOT_RESOLVED")
+            # eval "$(curl ...)": the evaluated string is the download itself.
+            self._code_from(sub_emits, line)
             self.nested(" ".join(w.text for w in args), line)
             return "", False
         if name in SHELLS:
@@ -566,6 +584,7 @@ class _Analysis:
             options = [w.text for w in args if w.text.startswith("-") and w.text != "-"]
             if any(o == inline or o == "--eval" or (not o.startswith("--") and inline[1] in o[1:]) for o in options):
                 self.gaps.add("INLINE_INTERPRETER_CODE_NOT_ANALYZED")
+                self._code_from(sub_emits, line)  # python3 -c "$(curl ...)"
                 return "", False
             if "-m" in options:
                 return "", False
@@ -631,6 +650,7 @@ class _Analysis:
                 return "", False
             if rest[0].expands:
                 self.gaps.add("EXPANSION_NOT_RESOLVED")
+                self._code_from(self._sub_emits, line)  # sh -c "$(curl ...)"
             self.nested(rest[0].text, line)
             return "", False
         if any(o == "-s" or (not o.startswith("--") and "s" in o[1:]) for o in options):
@@ -644,13 +664,6 @@ def _run(text: str, depth: int) -> _Analysis:
     if depth > MAX_DEPTH:
         result.gaps.add("NESTING_LIMIT")
         return result
-    if "\x00" in text:
-        # NUL is the analyser's private marker byte (\x00SUB\x00, \x00PROCSUBn\x00,
-        # \x00VAR:NAME\x00). Input must never be able to forge a marker: a
-        # crafted start-up file could otherwise crash the analyser and turn the
-        # whole persistence check into FAILED. Bash itself drops NUL bytes.
-        text = text.replace("\x00", "")
-        result.gaps.add("NUL_IN_INPUT")
     if len(text) > MAX_INPUT:
         text = text[:MAX_INPUT]
         result.gaps.add("INPUT_LIMIT")
@@ -675,7 +688,18 @@ def analyze(text: str, depth: int = 0) -> dict:
     Lines are hints for local inspection; no source content is emitted.
     `sourced` lists literal operands of source/. for the caller to resolve.
     """
+    nul_seen = "\x00" in text
+    if nul_seen:
+        # NUL is the analyser's private marker byte (\x00SUB\x00, \x00PROCSUBn\x00,
+        # \x00VAR:NAME\x00). Input must never be able to forge a marker: a
+        # crafted start-up file could otherwise crash the analyser and turn the
+        # whole persistence check into FAILED. Bash itself drops NUL bytes.
+        # Stripped here, at the public entry only: nested runs (eval, -c,
+        # PROMPT_COMMAND) legitimately carry markers produced by the lexer.
+        text = text.replace("\x00", "")
     result = _run(text, depth)
+    if nul_seen:
+        result.gaps.add("NUL_IN_INPUT")
     return {"patterns": sorted(result.patterns),
             "matches": [{"line": line, "patterns": sorted(rules)} for line, rules in sorted(result.matches.items())],
             "limitations": sorted(result.gaps),

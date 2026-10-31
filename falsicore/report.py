@@ -123,6 +123,7 @@ def report_data(audit) -> dict:
         "schema": SCHEMA,
         "tool_version": __version__, "created_utc": utc_now(),
         "scope": audit.scope, "profile": getattr(audit, "profile", "standard"),
+        "mode": "offline" if getattr(audit, "offline", False) else "live",
         "target_uid": getattr(audit, "uid", None), "host_ref": host_ref(getattr(audit, "root", Path("/"))),
         "outcome": verdict, "outcome_explanation_ua": OUTCOME_UA[verdict],
         "confirmed_compromise": False, "confirmed_attacker_attribution": False,
@@ -381,7 +382,7 @@ def load_verified_summary(path: Path) -> dict:
     return obj
 
 
-IDENTITY_FIELDS = ("schema", "tool_version", "rule_set_version", "scope", "profile", "target_uid", "host_ref")
+IDENTITY_FIELDS = ("schema", "tool_version", "rule_set_version", "scope", "profile", "target_uid", "host_ref", "mode")
 
 
 def incompatibilities(old: dict, current: dict) -> list[str]:

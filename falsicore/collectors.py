@@ -18,6 +18,7 @@ import time
 from collections import Counter
 from zlib import error as zlib_error
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Iterable
 
 from . import detectors as d
@@ -53,6 +54,12 @@ def _allowed_audit_invocation(name: str, args: list[str]) -> bool:
                                        and bool(re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", args[2])))
     if name == "journalctl":
         # Fixed read-only query shapes: auth/authpriv facility, or kernel transport.
+        # An offline image's own journal may be read through --directory=<root>/var/log/journal.
+        if args and args[0].startswith("--directory="):
+            directory = args[0][len("--directory="):]
+            if not (directory.startswith("/") and directory.endswith("/var/log/journal") and ".." not in directory.split("/")):
+                return False
+            args = args[1:]
         matches = (["SYSLOG_FACILITY=4", "SYSLOG_FACILITY=10"], ["_TRANSPORT=kernel"])
         return (len(args) >= 8 and args[:-7] in matches and args[-7] == "--since"
                 and bool(re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC", args[-6]))
@@ -87,7 +94,11 @@ SCOPE_LIMIT_CODES = {
     "NOT_IN_PROFILE": "this part of the check runs only in a deeper profile",
     "SOURCE_VANISHED": "the object disappeared between enumeration and reading",
     "PACKAGE_ATTESTED_NOT_PARSED": "root-owned file identical to its dpkg record; unsupported syntax not analysed, package trust assumed",
+    "LIVE_ONLY_NOT_IN_OFFLINE_IMAGE": "this part reads the running kernel or runs a probe; an offline image has neither",
 }
+LIVE_ONLY_COLLECTORS = ("processes", "network", "kernel", "crossview")
+# Probes that may run against an offline image: journalctl reading the image's own journal directory.
+OFFLINE_ALLOWED_TOOLS = ("journalctl",)
 SKIP_CODES = {"PROFILE_EXCLUDED": "excluded by profile", "BUDGET_EXHAUSTED": INCOMPLETE_CODES["BUDGET_EXHAUSTED"],
               "COLLECTOR_ERROR": "the collector raised and its observations were discarded"}
 
@@ -226,22 +237,29 @@ def _hex_endpoint_port(field: str) -> int | None:
 
 class Audit:
     def __init__(self, scope: str, target_user: str | None = None, incident_at: str | None = None,
-                 profile: str = "standard", max_seconds: int | None = None, root: Path | str = "/"):
+                 profile: str = "standard", max_seconds: int | None = None, root: Path | str = "/",
+                 offline: bool = False):
         # Every system path is resolved under `root` (default "/": the live
-        # host). A fixture host or an offline-mounted image is scanned by
-        # pointing root elsewhere; /proc and probe commands remain live-only.
+        # host). A fixture host emulating a live system points root elsewhere
+        # and keeps offline=False; a mounted image is scanned with offline=True:
+        # no live kernel is observed, no probe describes it, and users and
+        # homes come from the image's own /etc/passwd.
         self.root = Path(root)
         self.proc_root = self.root / "proc"
+        self.offline = bool(offline)
+        if self.offline and self.root.absolute() == Path("/"):
+            raise ValueError("offline mode needs a root other than /")
         if scope not in ("user", "system"):
             raise ValueError("scope must be user or system")
-        if scope == "system" and os.geteuid() != 0:
-            raise PermissionError("System scope requires explicit root invocation")
-        if scope == "user" and os.geteuid() == 0:
-            raise PermissionError("Run user scope without root privileges")
-        if scope == "system" and not target_user:
-            raise ValueError("System scope requires --target-user")
+        if not self.offline:
+            if scope == "system" and os.geteuid() != 0:
+                raise PermissionError("System scope requires explicit root invocation")
+            if scope == "user" and os.geteuid() == 0:
+                raise PermissionError("Run user scope without root privileges")
+        if (scope == "system" or self.offline) and not target_user:
+            raise ValueError("System scope and offline images require --target-user")
         target = target_user or pwd.getpwuid(os.getuid()).pw_name
-        entry = pwd.getpwnam(target)
+        entry = self._image_passwd(target) if self.offline else pwd.getpwnam(target)
         if entry.pw_uid == 0:
             raise ValueError("Refusing to treat root as browser user")
         self.profile = profile
@@ -290,6 +308,20 @@ class Audit:
             if anchor.tzinfo is None:
                 raise ValueError("--incident-at must include timezone offset (e.g. +02:00)")
             self.incident_at = anchor.astimezone(dt.timezone.utc)
+
+    def _image_passwd(self, user: str) -> Any:
+        """The image's own /etc/passwd entry for `user` (no NSS of the live host)."""
+        raw, status = safe_read(self.sys("/etc/passwd"), 4 * 1024 * 1024)
+        if raw is None:
+            raise ValueError(f"offline image has no readable /etc/passwd ({status})")
+        for line in raw.decode("utf-8", "replace").splitlines():
+            fields = line.split(":")
+            if len(fields) >= 7 and fields[0] == user:
+                try:
+                    return SimpleNamespace(pw_name=user, pw_uid=int(fields[2]), pw_dir=str(self.sys(fields[5])))
+                except ValueError as exc:
+                    raise ValueError("offline image passwd entry is malformed") from exc
+        raise ValueError(f"user {user!r} is not in the image's /etc/passwd")
 
     def sys(self, path: str) -> Path:
         """Absolute system path resolved under the scan root."""
@@ -382,6 +414,8 @@ class Audit:
             return
         if status == "UNAVAILABLE":
             gaps.add("TOOL_MISSING")
+        elif status == "SKIPPED" and error == "OFFLINE_IMAGE":
+            gaps.add("LIVE_ONLY_NOT_IN_OFFLINE_IMAGE")
         elif status == "SKIPPED":
             gaps.add("BUDGET_EXHAUSTED")
         elif result.get("truncated"):
@@ -394,6 +428,11 @@ class Audit:
     def command(self, tool: str, args: list[str], timeout: float = 12, limit: int = 2*1024*1024) -> dict:
         if not _allowed_audit_invocation(tool, args):
             raise PermissionError("Collector command is not an approved read-only probe")
+        if self.offline and tool not in OFFLINE_ALLOWED_TOOLS:
+            # A probe would describe the live host, not the image: refused, and
+            # reported as a scope limit rather than a missing tool.
+            return {"status": "SKIPPED", "stdout": "", "stderr": "", "exit": None, "elapsed_ms": 0,
+                    "truncated": False, "error": "OFFLINE_IMAGE", "residual_killed": False}
         if self.deadline is not None:
             remaining = self.deadline - time.monotonic()
             if remaining <= 0:
@@ -475,6 +514,10 @@ class Audit:
                 if name not in self.profile_config["checks"]:
                     self.checked(name, "SKIPPED", f"Excluded by {self.profile} profile; not a negative result",
                                  reasons=["PROFILE_EXCLUDED"])
+                    continue
+                if self.offline and name in LIVE_ONLY_COLLECTORS:
+                    self.checked(name, "SKIPPED", "Offline image: no running kernel to observe; not a negative result",
+                                 reasons=["LIVE_ONLY_NOT_IN_OFFLINE_IMAGE"])
                     continue
                 if self.over_budget():
                     self.checked(name, "SKIPPED", "Runtime budget exhausted before collector started",
@@ -1206,7 +1249,7 @@ class Audit:
             if flags:
                 self.finding("SUSPICIOUS_CRON_EXECUTION", "high", "Cron includes risky command pattern", p,
                              {"patterns": flags}, attack="T1053.003")
-        cr = self.command("crontab", ["-l", "-u", self.target_user] if self.scope == "system" else ["-l"], timeout=6, limit=64*1024)
+        cr = self._user_crontab()
         if cr["status"] == "COMPLETED":
             cron = cr["stdout"]
             self.baseline["cron_entry_hashes"].extend(d.digest(line) for line in cron.splitlines() if line.strip() and not line.lstrip().startswith("#"))
@@ -1309,6 +1352,23 @@ class Audit:
         self.conclude("persistence",
                       "Selected systemd/custom units (including symlink metadata), cron, SSH public-key hashes, shell and XDG autoruns; shell analysis is a lexical subset, not full Bash evaluation",
                       gaps, len(units_found) + len(cronfiles) + len(autostart))
+
+    def _user_crontab(self) -> dict:
+        """`crontab -l` on a live host; the spool file itself on an offline image."""
+        if not self.offline:
+            return self.command("crontab", ["-l", "-u", self.target_user] if self.scope == "system" else ["-l"],
+                                timeout=6, limit=64*1024)
+        for spool in ("/var/spool/cron/crontabs", "/var/spool/cron"):
+            path = self.sys(spool) / self.target_user
+            raw, status = safe_read(path, 64 * 1024)
+            if raw is not None:
+                return {"status": "COMPLETED", "stdout": raw.decode("utf-8", "replace"), "stderr": "", "exit": 0,
+                        "elapsed_ms": 0, "truncated": False, "error": "", "residual_killed": False}
+            if status not in ("ABSENT",):
+                return {"status": "FAILED", "stdout": "", "stderr": status, "exit": 1, "elapsed_ms": 0,
+                        "truncated": False, "error": status, "residual_killed": False}
+        return {"status": "FAILED", "stdout": "", "stderr": f"no crontab for {self.target_user}", "exit": 1,
+                "elapsed_ms": 0, "truncated": False, "error": "", "residual_killed": False}
 
     def _chromium_extension_settings(self, profile: Path, gaps: Gaps) -> dict[str, dict] | None:
         """extensions.settings from Preferences + Secure Preferences, or None if unreadable."""
@@ -1744,7 +1804,14 @@ class Audit:
 
     def _journal(self, match: list[str], days: int, lines: int, timeout: int) -> dict:
         since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S UTC")
-        return self.command("journalctl", [*match, "--since", since, "--lines", str(lines), "--no-pager", "--output=json",
+        prefix: list[str] = []
+        if self.offline:
+            journal_dir = self.sys("/var/log/journal")
+            if not journal_dir.is_dir() or journal_dir.is_symlink():
+                return {"status": "UNAVAILABLE", "stdout": "", "stderr": "", "exit": None, "elapsed_ms": 0,
+                        "truncated": False, "error": "no journal directory in image", "residual_killed": False}
+            prefix = [f"--directory={journal_dir.absolute().as_posix()}"]
+        return self.command("journalctl", [*prefix, *match, "--since", since, "--lines", str(lines), "--no-pager", "--output=json",
                                            "--output-fields=MESSAGE,_SYSTEMD_UNIT,_COMM,__REALTIME_TIMESTAMP"],
                             timeout=timeout, limit=JOURNAL_OUTPUT_LIMIT)
 
@@ -2219,12 +2286,23 @@ class Audit:
                              {"manager": manager, "codes": codes}, kind="HARDENING", attack="T1195.002")
         if self.profile == "deep":
             integrity: dict[str, Any] = self.stats.setdefault("package_integrity", {})
-            if "dpkg" in managers:
+            review: dict | None
+            if "dpkg" in managers and self.offline:
+                # dpkg --verify would examine the live host; compare the image's md5sums records with its files.
+                self._dpkg_md5(self.sys("/"))  # build the index
+                records = {rel: ("md5", digest) for rel, digest in (self._dpkg_index or {}).items()}
+                offline_review = self._verify_recorded("dpkg", records, {}, gaps)
+                integrity["dpkg"] = offline_review
+                self._integrity_findings("dpkg", offline_review, "dpkg://md5sums", gaps)
+            elif "dpkg" in managers:
                 review = self._verify_with_command("dpkg", "dpkg", ["--verify"], d.dpkg_verify_review, gaps)
                 if review is not None:
                     integrity["dpkg"] = review
                     self._integrity_findings("dpkg", review, "dpkg://verify", gaps)
-            if "rpm" in managers:
+            if "rpm" in managers and self.offline:
+                gaps.add("LIVE_ONLY_NOT_IN_OFFLINE_IMAGE")   # rpm's binary database is not parsed
+                integrity["rpm"] = {"status": "SKIPPED", "error": "OFFLINE_IMAGE"}
+            elif "rpm" in managers:
                 review = self._verify_with_command("rpm", "rpm", ["-Va"], pk.rpm_verify_review, gaps)
                 if review is not None:
                     integrity["rpm"] = review

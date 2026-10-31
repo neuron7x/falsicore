@@ -259,6 +259,7 @@ REASONS_UA: dict[str, str] = {
     "NOT_IN_PROFILE": "ця частина виконується лише в глибшому профілі",
     "SOURCE_VANISHED": "об'єкт зник між переліком і читанням",
     "PACKAGE_ATTESTED_NOT_PARSED": "файл root збігається із записом dpkg; складний синтаксис не розбирався (довіра до пакета)",
+    "LIVE_ONLY_NOT_IN_OFFLINE_IMAGE": "читає живе ядро або запускає пробу; в офлайн-образі цього немає",
 }
 
 _CONTROL = re.compile("[\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u202a-\\u202e\\u2066-\\u2069]")

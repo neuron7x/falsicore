@@ -35,7 +35,7 @@ from unittest.mock import patch
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from falsicore import __version__, guide, report  # noqa: E402
-from falsicore.collectors import Audit, _allowed_audit_invocation  # noqa: E402
+from falsicore.collectors import LIVE_ONLY_COLLECTORS, Audit, _allowed_audit_invocation  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULT_FILE = ROOT / "docs" / "DETECTION_VALIDITY.json"
@@ -81,8 +81,8 @@ MANIFEST_POWERFUL = {"manifest_version": 3, "name": "Helper", "version": "4.0.1"
 class FixtureHost:
     """A root, a home and a /proc under a temporary directory, plus canned probe output."""
 
-    def __init__(self, base: Path, scope: str = "user", profile: str = "deep") -> None:
-        self.scope, self.profile = scope, profile
+    def __init__(self, base: Path, scope: str = "user", profile: str = "deep", offline: bool = False) -> None:
+        self.scope, self.profile, self.offline = scope, profile, offline
         self.root = base / "root"
         self.home = self.root / "home" / USER
         self.proc = self.root / "proc"
@@ -184,6 +184,9 @@ class FixtureHost:
     # ---- the unplanted host --------------------------------------------------
     def _clean_host(self) -> None:
         self.file("/etc/os-release", 'ID=ubuntu\nVERSION_ID="24.04"\nPRETTY_NAME="Ubuntu 24.04 LTS"\n')
+        self.file("/etc/passwd", f"root:x:0:0:root:/root:/bin/bash\n{USER}:x:{UID}:{UID}:Fixture:/home/{USER}:/bin/bash\n")
+        # Read only when journalctl is absent or the host is an offline image without a journal directory.
+        self.file("/var/log/auth.log", "Nov  1 09:00:00 host CRON[1200]: pam_unix(cron:session): session opened for user root\n")
         self.file("/etc/machine-id", "0123456789abcdef0123456789abcdef\n")
         self.file("/proc/sys/kernel/random/boot_id", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n")
         for name, value in (("yama/ptrace_scope", "1"), ("unprivileged_bpf_disabled", "2"),
@@ -254,6 +257,7 @@ class Scenario:
     attack: str = ""
     scope: str = "user"
     notes: str = ""
+    offline: bool = False
     evidence: Callable[[list[dict]], bool] | None = None   # optional check on the matching findings
 
     @property
@@ -265,11 +269,12 @@ SCENARIOS: list[Scenario] = []
 
 
 def scenario(name: str, kind: str, rules: str | tuple[str, ...], attack: str = "", scope: str = "user",
-             notes: str = "", evidence: Callable[[list[dict]], bool] | None = None) -> Callable:
+             notes: str = "", evidence: Callable[[list[dict]], bool] | None = None, offline: bool = False) -> Callable:
     expects = frozenset((rules,) if isinstance(rules, str) else rules)
 
     def register(fn: Callable[[FixtureHost], None]) -> Callable[[FixtureHost], None]:
-        SCENARIOS.append(Scenario(name, kind, expects, fn, attack, scope, notes, evidence))
+        SCENARIOS.append(Scenario(name=name, kind=kind, expects=expects, plant=fn, attack=attack, scope=scope,
+                                  notes=notes, evidence=evidence, offline=offline))
         return fn
     return register
 
@@ -795,6 +800,30 @@ def _(h: FixtureHost) -> None:
     h.file("/var/log/auth.log", "Nov  1 09:12:01 host CRON[1200]: pam_unix(cron:session): session opened for user root\n")
 
 
+# ---- offline image (mounted root; nothing live is consulted) --------------------------------------------
+@scenario("offline_image_preload_and_cron_spool", "positive", ("SYSTEM_LOADER_PRELOAD", "SUSPICIOUS_USER_CRONTAB"),
+          "T1574.006", offline=True, notes="crontab comes from the image's spool file, not from a probe")
+def _(h: FixtureHost) -> None:
+    h.file("/etc/ld.so.preload", "/usr/local/lib/libhook.so\n")
+    h.file(f"/var/spool/cron/crontabs/{USER}", "@reboot /dev/shm/.k/keep\n")
+
+
+@scenario("offline_image_dpkg_drift_from_records", "positive", "PACKAGE_FILE_DRIFT", "T1554", offline=True,
+          notes="dpkg --verify would examine the live host; the image's md5sums records are compared with its files")
+def _(h: FixtureHost) -> None:
+    import hashlib
+    h.file("/var/lib/dpkg/info/hello.md5sums", hashlib.md5(b"original\n", usedforsecurity=False).hexdigest() + "  usr/bin/hello\n")
+    h.file("/usr/bin/hello", "tampered\n", 0o755)
+
+
+@scenario("offline_image_live_probes_never_run", "benign", ("EXECUTABLE_IN_VOLATILE_PATH", "HIDDEN_PROCESS", "REMOTE_ACCESS_PORT_EXPOSED"),
+          offline=True, notes="the fixture's own /proc and ss text describe a live host and must be ignored for an image")
+def _(h: FixtureHost) -> None:
+    h.process(4242, "/tmp/.x/payload", name="payload")
+    h.hidden_pids.add(6002)
+    h.listen("tcp", "0.0.0.0", 22, "sshd")
+
+
 # ---- runner --------------------------------------------------------------------------------------
 def make_audit(host: FixtureHost) -> Audit:
     pw = SimpleNamespace(pw_uid=UID, pw_dir=str(host.home), pw_name=USER)
@@ -803,7 +832,7 @@ def make_audit(host: FixtureHost) -> Audit:
          patch("falsicore.collectors.pwd.getpwuid", return_value=pw), \
          patch("falsicore.collectors.os.geteuid", return_value=euid), \
          patch("falsicore.collectors.os.getuid", return_value=euid):
-        audit = Audit(host.scope, target_user=USER, profile=host.profile, root=host.root)
+        audit = Audit(host.scope, target_user=USER, profile=host.profile, root=host.root, offline=host.offline)
     audit.command = host.fake_command  # type: ignore[method-assign]
     audit.pid_probe = host.pid_probe
     if host.lookup_only:
@@ -822,21 +851,24 @@ def run_host(host: FixtureHost) -> dict:
             "outcome": summary["outcome"], "rules": sorted({f["rule"] for f in audit.findings})}
 
 
-def clean_host_result(base: Path, scope: str) -> dict:
-    host = FixtureHost(base / f"clean-{scope}", scope=scope)
+def clean_host_result(base: Path, scope: str, offline: bool = False) -> dict:
+    host = FixtureHost(base / f"clean-{scope}{'-offline' if offline else ''}", scope=scope, offline=offline)
     result = run_host(host)
-    incomplete = [c["check"] for c in result["coverage"] if c["check"] in ESSENTIAL and c["status"] != "COMPLETED"]
-    return {"scope": scope, "outcome": result["outcome"], "findings": result["rules"],
+    live_only = set(LIVE_ONLY_COLLECTORS) if offline else set()
+    incomplete = [c["check"] for c in result["coverage"]
+                  if c["check"] in ESSENTIAL and c["check"] not in live_only and c["status"] != "COMPLETED"]
+    return {"scope": scope, "mode": "offline" if offline else "live", "outcome": result["outcome"], "findings": result["rules"],
             "coverage": {c["check"]: c["status"] for c in result["coverage"]}, "incomplete_essential": incomplete,
             "passes": result["outcome"] == "NO_COMPROMISE_INDICATORS_OBSERVED" and not result["rules"]}
 
 
 def run_scenario(base: Path, sc: Scenario, baseline_rules: set[str]) -> dict:
-    host = FixtureHost(base / sc.name, scope=sc.scope)
+    host = FixtureHost(base / sc.name, scope=sc.scope, offline=sc.offline)
     sc.plant(host)
     result = run_host(host)
     observed = set(result["rules"])
-    row = {"name": sc.name, "kind": sc.kind, "scope": sc.scope, "rules": sc.rules, "attack": sc.attack,
+    row = {"name": sc.name, "kind": sc.kind, "scope": sc.scope, "mode": "offline" if sc.offline else "live",
+           "rules": sc.rules, "attack": sc.attack,
            "observed": sorted(observed), "outcome": result["outcome"], "notes": sc.notes}
     if sc.kind == "positive":
         missed = sorted(sc.expects - observed)
@@ -854,7 +886,7 @@ def run_scenario(base: Path, sc: Scenario, baseline_rules: set[str]) -> dict:
 def evaluate() -> dict:
     with tempfile.TemporaryDirectory(prefix="falsicore-validity-") as tmp:
         base = Path(tmp)
-        clean = [clean_host_result(base, "user"), clean_host_result(base, "system")]
+        clean = [clean_host_result(base, "user"), clean_host_result(base, "system"), clean_host_result(base, "user", offline=True)]
         baseline_rules = set(clean[0]["findings"]) | set(clean[1]["findings"])
         rows = [run_scenario(base, sc, baseline_rules) for sc in SCENARIOS]
     per_rule: dict[str, dict] = {}
@@ -896,7 +928,7 @@ def markdown(result: dict) -> str:
              f"Method: {result['method']}.", f"Measures: {result['measures']}. Does not measure: {result['does_not_measure']}.", "",
              "| Clean host | Outcome | Findings | Incomplete essential checks |", "|---|---|---|---|"]
     for c in result["clean_host"]:
-        lines.append(f"| {c['scope']} | `{c['outcome']}` | {len(c['findings'])} | {', '.join(c['incomplete_essential']) or '—'} |")
+        lines.append(f"| {c['scope']} ({c['mode']}) | `{c['outcome']}` | {len(c['findings'])} | {', '.join(c['incomplete_essential']) or '—'} |")
     lines += ["", "| Rule | Positives detected | Benign twins silent | Known gaps |", "|---|---|---|---|"]
     for rule, e in result["per_rule"].items():
         lines.append(f"| `{rule}` | {e['detected']}/{e['positives']} | {e['benign_twins'] - e['false_alarms']}/{e['benign_twins']} | {e['known_gaps']} |")

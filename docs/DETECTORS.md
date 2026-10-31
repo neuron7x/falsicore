@@ -62,7 +62,22 @@ reason code; `COMPLETED` cannot carry one.
 
 | Incompleteness | Scope limit |
 |---|---|
-| `PERMISSION_DENIED`, `TOOL_MISSING`, `TOOL_FAILED`, `TIMEOUT`, `INPUT_TRUNCATED`, `ENUMERATION_LIMIT`, `BUDGET_EXHAUSTED`, `PARSE_UNSUPPORTED`, `MALFORMED_INPUT`, `HISTORY_UNAVAILABLE`, `SYMLINK_NOT_FOLLOWED`, `ATTRIBUTION_UNAVAILABLE`, `READ_FAILED` | `OTHER_ACCOUNTS_NOT_VISIBLE`, `REQUIRES_SYSTEM_SCOPE`, `NOT_IN_PROFILE`, `SOURCE_VANISHED`, `PACKAGE_ATTESTED_NOT_PARSED` |
+| `PERMISSION_DENIED`, `TOOL_MISSING`, `TOOL_FAILED`, `TIMEOUT`, `INPUT_TRUNCATED`, `ENUMERATION_LIMIT`, `BUDGET_EXHAUSTED`, `PARSE_UNSUPPORTED`, `MALFORMED_INPUT`, `HISTORY_UNAVAILABLE`, `SYMLINK_NOT_FOLLOWED`, `ATTRIBUTION_UNAVAILABLE`, `READ_FAILED` | `OTHER_ACCOUNTS_NOT_VISIBLE`, `REQUIRES_SYSTEM_SCOPE`, `NOT_IN_PROFILE`, `SOURCE_VANISHED`, `PACKAGE_ATTESTED_NOT_PARSED`, `LIVE_ONLY_NOT_IN_OFFLINE_IMAGE` |
+
+## Offline image mode (`--root`, 0.1.4)
+
+`scan --root /mnt/image --target-user NAME` reads a mounted root instead of
+the live host (NIST SP 800-86: analysis of acquired media does not trust the
+subject's running kernel). Users and homes come from the image's `/etc/passwd`;
+`processes`, `network`, `kernel` and `crossview` are `SKIPPED` with
+`LIVE_ONLY_NOT_IN_OFFLINE_IMAGE` and leave the essential set, so the verdict
+speaks about the disk; every probe except `journalctl --directory=<root>/var/log/journal`
+is refused (`SKIPPED`, scope limit, never "tool missing"); the user crontab is
+the spool file (`/var/spool/cron/crontabs/NAME`, `/var/spool/cron/NAME`);
+`dpkg` integrity compares the image's `*.md5sums` records with its files
+within the same bounds as pacman/apk, and `rpm` is a declared limit (binary
+database). `summary.mode` is `offline` and part of the report identity, so an
+offline report is never compared with a live baseline.
 
 Skipped checks use `PROFILE_EXCLUDED` or `BUDGET_EXHAUSTED`; failed collectors
 use `COLLECTOR_ERROR`.

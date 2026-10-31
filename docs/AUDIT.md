@@ -130,6 +130,13 @@ listener in both views and the standard `binfmt_misc` mount. Report schema
 is `falsicore.summary.v5`; v4 reports are read as LEGACY because the essential
 set and the rule names changed.
 
+Offline image mode (0.1.4, `--root`): the live-only collectors are declared
+`SKIPPED/LIVE_ONLY_NOT_IN_OFFLINE_IMAGE` and leave the essential set; every
+probe but the image's own journal is refused as a scope limit; the harness
+runs a third clean host (offline) and three offline scenarios, one of which
+plants a volatile process, a hidden PID and an exposed listener in the
+fixture's live views and requires them to stay unreported for an image.
+
 No site is special-cased (0.1.4): the browser-extension assessment used to
 single out Instagram hosts (`instagram_access_potential`,
 `content_script_instagram_access`), a remnant of the originating incident.

@@ -130,6 +130,17 @@ listener in both views and the standard `binfmt_misc` mount. Report schema
 is `falsicore.summary.v5`; v4 reports are read as LEGACY because the essential
 set and the rule names changed.
 
+No site is special-cased (0.1.4): the browser-extension assessment used to
+single out Instagram hosts (`instagram_access_potential`,
+`content_script_instagram_access`), a remnant of the originating incident.
+It now reports `host_scope` and `content_script_scope` from the match-pattern
+grammar (`all_urls` > `wildcard_domains` > `specific` > `none`); `risk_flag`
+is a sensitive API together with any host access, a content script on broad
+hosts, the debugger API or native messaging. A content script on one named
+site without any API is no longer flagged (it was, for one site only).
+The grammar function (`grants_host_access`) and its substring-evasion tests
+(`fakeexample.com`, `example.com.evil`) are unchanged in substance.
+
 Rule renames in 0.1.4 (one rule per observation, the manager is evidence):
 `DPKG_FILE_DRIFT` → `PACKAGE_FILE_DRIFT`, `DPKG_CONFFILE_CHANGED` →
 `PACKAGE_CONFFILE_CHANGED`, `DPKG_FILES_MISSING` → `PACKAGE_FILES_MISSING`,

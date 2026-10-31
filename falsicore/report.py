@@ -131,7 +131,7 @@ def report_data(audit) -> dict:
         "cannot_exclude": [
             "zero-day exploitation", "past attacks with no retained artifacts",
             "adversary with root/kernel control", "firmware or hardware compromise",
-            "server-side Instagram or other account compromise", "tampering with local telemetry",
+            "server-side compromise of any online account", "tampering with local telemetry",
         ],
         "coverage_status_counts": dict(sorted(statuses.items())),
         "material_coverage_gaps": gaps,
@@ -152,7 +152,7 @@ def recommendations(audit) -> list[str]:
         items.append("COVERAGE: PARTIAL означає, що ціль перевірки оглянуто не повністю (див. коди причин); FAILED — збій колектора. "
                      "Обмеження scope (наприклад, інші облікові записи) не роблять перевірку неповною, але й не перевірені.")
     items.extend([
-        "ACCOUNTS: Перевірити активні сесії облікових записів (зокрема Instagram/Meta Accounts Center) з довіреного пристрою.",
+        "ACCOUNTS: Перевірити активні сесії облікових записів (пошта, месенджери, соцмережі, банк) з довіреного пристрою.",
         "UPDATES: Після збереження доказів оновити ОС і браузери з офіційних джерел.",
         "IF ROOT COMPROMISE SUSPECTED: Не покладатися лише на цю живу систему; потрібен незалежний офлайн-аналіз.",
     ])

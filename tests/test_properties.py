@@ -213,7 +213,7 @@ class DetectorTotality(unittest.TestCase):
 
     @given(any_text)
     def test_host_pattern_check_total(self, pattern):
-        self.assertIsInstance(detectors.grants_instagram_access(pattern), bool)
+        self.assertIsInstance(detectors.grants_host_access(pattern, ("instagram.com", "www.instagram.com", "i.instagram.com", "graph.instagram.com")), bool)
 
     @given(st.binary(max_size=300), st.integers(0, 299))
     def test_json_size_bound_is_enforced_before_parsing(self, raw, limit):

@@ -1508,8 +1508,8 @@ class Audit:
                                      {"browser": name, "extension_ref": ext_id,
                                       "sensitive_permissions": r["sensitive_permissions"],
                                       "broad_host_access": r["broad_host_access"],
-                                      "instagram_access_potential": r["instagram_access_potential"],
-                                      "content_script_instagram_access": r["content_script_instagram_access"],
+                                      "host_scope": r["host_scope"],
+                                      "content_script_scope": r["content_script_scope"],
                                       "extension": identity},
                                      kind="EXPOSURE", attack="T1176.001")
         return ext_count, profile_count, truncated
@@ -1612,7 +1612,7 @@ class Audit:
                                      {"browser": label, "extension_ref": aid,
                                       "sensitive_permissions": review["sensitive_permissions"],
                                       "broad_host_access": review["broad_host_access"],
-                                      "instagram_access_potential": review["instagram_access_potential"],
+                                      "host_scope": review["host_scope"],
                                       "extension": identity},
                                      kind="EXPOSURE", attack="T1176.001")
         return count, truncated

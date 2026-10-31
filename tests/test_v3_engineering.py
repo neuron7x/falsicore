@@ -238,12 +238,12 @@ class ReportIntegrityTests(unittest.TestCase):
 
 
 class DetectorControlsTests(unittest.TestCase):
-    def test_ig_content_script_is_risk_even_without_sensitive_api(self):
-        r = d.extension_assessment({"content_scripts":[{"matches":["https://www.instagram.com/*"]}]})
+    def test_broad_content_script_is_risk_even_without_sensitive_api(self):
+        r = d.extension_assessment({"content_scripts":[{"matches":["*://*.example.com/*"]}]})
         self.assertTrue(r["risk_flag"])
-        self.assertTrue(r["content_script_instagram_access"])
+        self.assertEqual(r["content_script_scope"], "wildcard_domains")
 
-    def test_other_site_script_not_instagram_risk(self):
+    def test_single_site_script_without_api_is_not_risk(self):
         r = d.extension_assessment({"content_scripts":[{"matches":["https://example.org/*"]}]})
         self.assertFalse(r["risk_flag"])
 

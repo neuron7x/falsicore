@@ -81,30 +81,64 @@ def safe_json_parse(raw: bytes, limit: int = MAX_JSON_BYTES) -> Any:
     return json.loads(raw.decode("utf-8-sig", "replace"))
 
 
-def grants_instagram_access(pattern: str) -> bool:
-    """Check WebExtension match-pattern host grammar against actual IG hosts.
+BROAD_HOST_PATTERNS = ("<all_urls>", "*://*/*", "http://*/*", "https://*/*", "ws://*/*", "wss://*/*")
 
-    A substring match incorrectly treats fakeinstagram.com or
-    instagram.com.evil.invalid as instagram.com. This deliberately bounded
-    static model does not resolve DNS, evaluate JavaScript, or inspect runtime
-    browser permission grants.
+
+def match_pattern_host(pattern: str) -> str | None:
+    """Host part of a WebExtension match pattern, or None when the grammar is not met.
+
+    Deliberately bounded static model: no DNS, no JavaScript evaluation, no
+    runtime grant inspection. `<all_urls>` is returned as "*".
     """
     if pattern == "<all_urls>":
-        return True
+        return "*"
     if not isinstance(pattern, str) or "://" not in pattern:
-        return False
+        return None
     scheme, rest = pattern.split("://", 1)
-    if scheme not in ("*", "https", "http", "file", "ftp"):
-        return False
+    if scheme not in ("*", "https", "http", "file", "ftp", "ws", "wss"):
+        return None
     host = rest.split("/", 1)[0].lower()
     if not host or not all(ch.isalnum() or ch in "*.-" for ch in host):
+        return None
+    return host
+
+
+def grants_host_access(pattern: str, hosts: Iterable[str]) -> bool:
+    """Whether a match pattern reaches ANY of `hosts` (exact grammar, no substrings).
+
+    A substring test would accept fakeexample.com or example.com.evil.invalid
+    for example.com; the match-pattern host grammar does not.
+    """
+    host = match_pattern_host(pattern)
+    if host is None:
         return False
-    candidates = ("instagram.com", "www.instagram.com", "i.instagram.com", "graph.instagram.com")
-    return any(fnmatch.fnmatchcase(candidate, host) for candidate in candidates)
+    return any(fnmatch.fnmatchcase(candidate.lower(), host) for candidate in hosts)
+
+
+def host_scope(patterns: Iterable[str]) -> str:
+    """all_urls > wildcard_domains > specific > none, over valid match patterns only."""
+    scope = "none"
+    for pattern in patterns:
+        host = match_pattern_host(pattern)
+        if host is None:
+            continue
+        if host == "*":
+            return "all_urls"
+        if "*" in host:
+            scope = "wildcard_domains"
+        elif scope == "none":
+            scope = "specific"
+    return scope
 
 
 def extension_assessment(manifest: dict) -> dict:
-    """Works with MV2/MV3. Static permission review only."""
+    """Works with MV2/MV3. Static permission review only; no site is special-cased.
+
+    Capability is declared, not observed behaviour. `risk_flag` marks an
+    extension that can read or alter web content or browser state: a
+    sensitive API together with any host access, a content script on broad
+    hosts, the debugger API or native messaging.
+    """
     if not isinstance(manifest, dict):
         raise ValueError("manifest must be an object")
     permissions = manifest.get("permissions", [])
@@ -119,26 +153,29 @@ def extension_assessment(manifest: dict) -> dict:
     entries = [x for x in permissions if isinstance(x, str)]
     host_entries = [x for x in (hosts + entries) if isinstance(x, str) and ("://" in x or x == "<all_urls>")]
     sensitive = sorted(set(entries) & SENSITIVE_EXTENSION_PERMS)
-    wide = any(x in ("<all_urls>", "*://*/*", "http://*/*", "https://*/*") for x in host_entries)
-    instagram = any(grants_instagram_access(h) for h in host_entries)
+    wide = any(x in BROAD_HOST_PATTERNS for x in host_entries)
+    content_matches: list[str] = []
     content_scripts = manifest.get("content_scripts", [])
-    content_script_instagram = False
     if isinstance(content_scripts, list):
         for cs in content_scripts:
             if isinstance(cs, dict):
-                for m in cs.get("matches", []) if isinstance(cs.get("matches", []), list) else []:
-                    if isinstance(m, str) and grants_instagram_access(m):
-                        instagram = True
-                        content_script_instagram = True
+                matches = cs.get("matches", [])
+                content_matches.extend(m for m in (matches if isinstance(matches, list) else []) if isinstance(m, str))
+    scripts_scope = host_scope(content_matches)
+    declared_scope = host_scope(host_entries)
+    any_host = declared_scope != "none" or scripts_scope != "none"
     return {
         "manifest_version": manifest.get("manifest_version"),
         "sensitive_permissions": sensitive,
-        "broad_host_access": wide,
-        "instagram_access_potential": instagram,
-        "content_script_instagram_access": content_script_instagram,
+        "broad_host_access": wide or declared_scope == "all_urls",
+        "host_scope": declared_scope,
+        "declared_host_count": len(host_entries),
+        "content_script_scope": scripts_scope,
+        "content_script_count": len(content_matches),
         "optional_sensitive_permissions": sorted({x for x in optional if isinstance(x, str)} & SENSITIVE_EXTENSION_PERMS),
         "has_native_host_access": "nativeMessaging" in sensitive,
-        "risk_flag": bool((wide or instagram) and sensitive) or content_script_instagram or "debugger" in sensitive or "nativeMessaging" in sensitive,
+        "risk_flag": bool(sensitive and any_host) or scripts_scope in ("all_urls", "wildcard_domains")
+                     or "debugger" in sensitive or "nativeMessaging" in sensitive,
     }
 
 

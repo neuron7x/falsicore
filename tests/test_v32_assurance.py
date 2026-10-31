@@ -171,18 +171,18 @@ class SeededInputRobustness(unittest.TestCase):
         alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.%/:*[]<>\\x00+-?\t\n"
         for _ in range(500):
             s = "".join(rand.choices(alphabet, k=rand.randint(0, 180)))
-            self.assertIsInstance(detectors.grants_instagram_access(s), bool)
+            self.assertIsInstance(detectors.grants_host_access(s, ("instagram.com", "www.instagram.com", "i.instagram.com", "graph.instagram.com")), bool)
             self.assertIsInstance(detectors.endpoint_class(s), str)
             self.assertIsInstance(detectors.parse_ss(s), list)
             self.assertIsInstance(detectors.suspect_command(s), list)
 
     def test_known_host_boundary_negative_set(self):
         for host in ["fakeinstagram.com", "notinstagram.com", "instagram.com.attacker.example", "evil-instagram.com", "instagrarn.com", "www.instagram.com.evil.example"]:
-            self.assertFalse(detectors.grants_instagram_access("https://"+host+"/*"), host)
+            self.assertFalse(detectors.grants_host_access("https://"+host+"/*", ("instagram.com", "www.instagram.com", "i.instagram.com", "graph.instagram.com")), host)
 
     def test_known_host_boundary_positive_set(self):
         for host in ["instagram.com", "www.instagram.com", "graph.instagram.com", "*.instagram.com"]:
-            self.assertTrue(detectors.grants_instagram_access("https://"+host+"/*"), host)
+            self.assertTrue(detectors.grants_host_access("https://"+host+"/*", ("instagram.com", "www.instagram.com", "i.instagram.com", "graph.instagram.com")), host)
 
 
 if __name__ == "__main__":

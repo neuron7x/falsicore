@@ -24,11 +24,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import stat
 import sys
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable

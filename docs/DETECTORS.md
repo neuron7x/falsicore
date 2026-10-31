@@ -63,7 +63,8 @@ use `COLLECTOR_ERROR`.
 arbitrary input, `tests/test_properties.py`):
 
 - patterns `PATTERN_CODES`: `TEMP_PATH_IN_EXECUTION`, `REMOTE_SCRIPT_PIPELINE`,
-  `BASE64_DECODE_EXECUTION_CONTEXT`, `RISKY_EXECUTION_FLAG`;
+  `BASE64_DECODE_EXECUTION_CONTEXT`, `RISKY_EXECUTION_FLAG`, `NETWORK_REDIRECTION`
+  (a redirection to `/dev/tcp/…` or `/dev/udp/…`: the shell itself opens a socket);
 - limitations `LIMITATION_CODES`: `TOKEN_LIMIT`, `UNTERMINATED_HEREDOC`,
   `UNPARSED_QUOTING`, `EXPANSION_NOT_RESOLVED`, `INLINE_INTERPRETER_CODE_NOT_ANALYZED`,
   `MISSING_SHELL_COMMAND_OPERAND`, `HEREDOC_EXPANSION_NOT_RESOLVED`, `NESTING_LIMIT`,
@@ -71,8 +72,18 @@ arbitrary input, `tests/test_properties.py`):
 
 Any limitation makes the owning check `PARTIAL` with `PARSE_UNSUPPORTED` (or
 `PACKAGE_ATTESTED_NOT_PARSED` for a root-owned file equal to its dpkg record).
-`NUL_IN_INPUT`: NUL bytes are removed before lexing because NUL is the
+`NUL_IN_INPUT`: NUL bytes are removed at the public entry because NUL is the
 analyser's private marker byte; input can therefore never forge a marker.
+
+Code that reaches an interpreter through a substitution is attributed to the
+substitution's source: `eval "$(curl …)"`, `sh -c "$(curl …)"`,
+`python3 -c "$(curl …)"` and `PROMPT_COMMAND="$(curl …)"` are
+`REMOTE_SCRIPT_PIPELINE`; `bash -c "$(… | base64 -d)"` is
+`BASE64_DECODE_EXECUTION_CONTEXT`. The evaluated text itself stays
+`EXPANSION_NOT_RESOLVED`. Known, documented gaps: a download bound to a
+variable first (`x=$(curl …); eval "$x"`), a relative program after `cd`
+(`cd /tmp && ./x`), and the output of a local program (`eval "$(dircolors …)"`)
+are limitations only.
 
 `falsicore/guide.py` holds the Ukrainian interpretation of every rule: the
 observation, benign alternatives, uncertainty, priority P1–P3 and a

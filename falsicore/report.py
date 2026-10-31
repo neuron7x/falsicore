@@ -40,7 +40,7 @@ def host_ref() -> str:
 # Per-run attribution (PIDs, timestamps, process start ticks) is evidence for
 # the operator but not part of a finding's identity: excluding it keeps IDs and
 # the analysis digest stable across scans of an unchanged system.
-RUN_METADATA_KEYS = ("id", "observations")
+RUN_METADATA_KEYS = ("id", "observations", "observations_omitted")
 MAX_OBSERVATIONS_PER_FINDING = 20
 
 
@@ -52,22 +52,27 @@ def stable_findings(findings: list[dict]) -> list[dict]:
     """Same set of observations => same IDs and order regardless of enumeration order.
 
     Identical canonical findings merge into one; their run observations are kept
-    (deterministically ordered, bounded) instead of being dropped.
+    (deterministically ordered, bounded) instead of being dropped. The function
+    is idempotent: stabilising an already stable list changes neither the IDs
+    nor the count of omitted observations (property-tested).
     """
     merged: dict[str, dict] = {}
     for finding in findings:
         canonical = _canonical(finding)
         payload = json.dumps(canonical, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
         full = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-        item = merged.setdefault(full, {**canonical, "observations": []})
+        item = merged.setdefault(full, {**canonical, "observations": [], "observations_omitted": 0})
         item["observations"].extend(x for x in finding.get("observations", []) if isinstance(x, dict))
+        omitted = finding.get("observations_omitted", 0)
+        if isinstance(omitted, int) and not isinstance(omitted, bool) and omitted > 0:
+            item["observations_omitted"] += omitted
     keyed = []
     for full, item in merged.items():
         observations = sorted(item["observations"], key=lambda o: json.dumps(o, sort_keys=True, default=str))
         item["observations"] = observations[:MAX_OBSERVATIONS_PER_FINDING]
-        item["observations_omitted"] = max(0, len(observations) - MAX_OBSERVATIONS_PER_FINDING)
+        item["observations_omitted"] += max(0, len(observations) - MAX_OBSERVATIONS_PER_FINDING)
         item["id"] = "F-" + full[:20]
-        keyed.append((SEVERITY_ORDER.get(item.get("severity"), 5), item.get("rule", ""), full, item))
+        keyed.append((SEVERITY_ORDER.get(str(item.get("severity")), 5), item.get("rule", ""), full, item))
     return [item for _, _, _, item in sorted(keyed, key=lambda k: k[:3])]
 
 
@@ -86,12 +91,15 @@ def _analysis_digest(findings: list[dict], coverage: list[dict], baseline: dict 
     """Digest of normalized observations only; excludes clock, duration, run location
     and per-run process attribution."""
     payload = {
-        "findings": [{k: v for k, v in _canonical(f).items() if k != "observations_omitted"}
-                     for f in stable_findings(findings)],
+        "findings": [_canonical(f) for f in stable_findings(findings)],
+        # Total order over the whole row: a key on (check, status) alone left
+        # ties to enumeration order, so the digest was not order-independent
+        # (found by property testing, P-4). Rows of a real scan have unique
+        # check names, so digests of earlier reports are unchanged.
         "coverage": sorted(
             ({"check": c["check"], "status": c["status"], "details": c.get("details", ""),
               "reason_codes": c.get("reason_codes", {}), "scope_limits": c.get("scope_limits", {})}
-             for c in coverage), key=lambda c: (c["check"], c["status"])),
+             for c in coverage), key=lambda c: json.dumps(c, sort_keys=True, ensure_ascii=False)),
         # Baseline fingerprints are derived observations; binding them here
         # makes an edited baseline inconsistent with its own report.
         "baseline": {k: sorted(set(v)) for k, v in (baseline or {}).items()},
@@ -182,7 +190,7 @@ def build_markdown(summary: dict, findings: list[dict], coverage: list[dict], ad
     rows += ["", "## Що знайдено", "", "| ID | Правило | Категорія | Пріоритет перевірки | Джерело |", "|---|---|---|---|---|"]
     for f in findings[:MARKDOWN_FINDING_LIMIT]:
         rows.append("| " + " | ".join(_safe_markdown(x) for x in (
-            f.get("id", ""), f.get("rule", ""), KIND_UA.get(f.get("kind"), f.get("kind")),
+            f.get("id", ""), f.get("rule", ""), KIND_UA.get(str(f.get("kind")), f.get("kind")),
             guide.rule(f.get("rule", ""))["priority"], f.get("source_ref", ""))) + " |")
     if len(findings) > MARKDOWN_FINDING_LIMIT:
         rows.append(f"| … | ще {len(findings) - MARKDOWN_FINDING_LIMIT} знахідок лише у findings.json | | | |")
@@ -332,10 +340,11 @@ def verify_reports(folder: Path) -> dict:
             continue
         names.add(name)
         content, status = safe_read(folder / name, 4 * 1024 * 1024)
-        matched = content is not None and hashlib.sha256(content).hexdigest() == expected
-        if matched:
+        matched = False
+        if content is not None and hashlib.sha256(content).hexdigest() == expected:
+            matched = True
             matched_contents[name] = content
-        entries.append({"entry": name, "verified": bool(matched), "status": status})
+        entries.append({"entry": name, "verified": matched, "status": status})
     actual_names = {p.name for p in folder.iterdir()}
     valid_structure = REQUIRED <= names and names == actual_names - {"evidence_manifest.sha256"}
     verified_hashes = bool(entries) and valid_structure and all(x["verified"] for x in entries)

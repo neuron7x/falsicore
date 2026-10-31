@@ -194,9 +194,9 @@ def _run_bounded(binary: str, args: list[str], timeout: float, limit: int,
                 # open after killpg. Report it instead of waiting for it.
                 if not selector.select(timeout=0.2):
                     error = (error + ";" if error else "") + "PIPE_HOLDER_OUTSIDE_GROUP"
-            for stream in (proc.stdout, proc.stderr):
-                if stream is not None:
-                    stream.close()
+            for handle in (proc.stdout, proc.stderr):
+                if handle is not None:
+                    handle.close()
         selector.close()
 
     return {

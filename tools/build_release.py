@@ -12,8 +12,8 @@ from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 
 ROOT = Path(__file__).resolve().parents[1]
 # .falsicore-audit holds private host observations and rollback material: never a release input.
-IGNORED_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".git", ".venv", ".tox",
-                ".falsicore-audit"}
+IGNORED_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis", ".git", ".venv",
+                ".tox", ".falsicore-audit"}
 IGNORED_FILES = {".coverage", "SOURCE_MANIFEST.sha256", ".DS_Store"}
 ROOT_ALLOW = {
     ".gitignore", ".gitattributes", "README.md", "SECURITY.md", "CONTRIBUTING.md",

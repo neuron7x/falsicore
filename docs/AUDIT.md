@@ -62,6 +62,33 @@ point to 0.1.3 code.
 | R-10 | `tools/build_release.py`, CI | Found on Dependabot PR #1: `SOURCE_MANIFEST.sha256` also hashed `.github/` workflows, so every automated workflow update failed CI (manifest stale), and dependency updates could never land unattended. | Workflows are excluded from the source manifest and the portable app. They ship in the full ZIP's `source/` tree, covered by `SHA256SUMS`. Weekly scheduled CI added. | `test_workflow_changes_do_not_invalidate_source_manifest` |
 | L-1 | `cli.py` explain/verify | A 0.1.2 (schema v3) report was rejected as "integrity failed". | Detected as `LEGACY`: file hashes are checked, semantics are not re-derived, and it is never compared with new reports | `LegacyReports` |
 
+## Property-based testing (0.1.4)
+
+`tests/test_properties.py` states universally quantified claims with
+Hypothesis (development dependency; the shipped tool stays standard-library).
+CI runs them with `FALSICORE_REQUIRE_HYPOTHESIS=1`, so an absent library is a
+failure, never a skip. Writing the properties refuted five existing behaviours
+**before** any random example was drawn; two more were found by Hypothesis.
+Each counterexample is kept as a plain unittest in
+`tests/test_property_regressions.py`, so the packaged self-test guards it
+without Hypothesis.
+
+| ID | Where | Refuted claim / impact | Found by | Fix |
+|---|---|---|---|---|
+| P-1 | `shell_syntax._run` | NUL is the analyser's private marker byte. A start-up file containing `\x00PROCSUBzz\x00` raised `ValueError` inside `analyze`, the collector raised, and the whole `persistence` check became `FAILED` with its observations discarded: attacker-controlled content could blank a check. | stating totality | NUL bytes are removed before lexing and reported as `NUL_IN_INPUT` (→ `PARSE_UNSUPPORTED`), so input can never forge a marker |
+| P-2 | `shell_syntax._run` | A comment ending in a backslash (`# note \`) was reported as `INCOMPLETE_CONTINUATION`, turning a complete check into `PARTIAL`. `echo a \ b` (escaped space) was flagged too. | stating "a comment is inert" | continuation is decided in lexer state: only a bare trailing backslash outside comments and quotes |
+| P-3 | `report.stable_findings` | Not idempotent: a second pass changed every finding ID (`observations_omitted` had entered the canonical form) and reset the omitted count to 0. | stating idempotence | `observations_omitted` is run metadata, excluded from identity; omitted counts accumulate across merged duplicates. Digests of 0.1.3 reports are unchanged. |
+| P-4 | `report._analysis_digest` | Coverage rows were sorted by `(check, status)` only; rows that tied kept enumeration order, so the digest was not order-independent. | Hypothesis, shrunk to two tied rows | total order over the serialised row. Real scans have unique check names, so earlier digests are unchanged. |
+| P-5 | `shell_syntax._Analysis.command` | A program whose basename is a reserved word (`/tmp/done`, `/tmp/in`) was treated as the keyword and skipped, escaping `TEMP_PATH_IN_EXECUTION`. | Hypothesis (`/tmp/in --arg`) | only a bare, unquoted word is a reserved word |
+| P-6 | `guide.identity_line` | Non-dict `evidence` or non-dict first observation raised `AttributeError` in `explain`. | stating totality | defensive type checks; returns an empty line |
+| P-7 | mypy | 10 type errors were "informational" (`RELEASE_EVIDENCE.json`). Two were real: `install_location`/`signed_state` lookups passed arbitrary JSON values to integer-keyed tables. | `mypy --check-untyped-defs` | typed `Profile`, narrowed lookups; mypy is a CI gate (zero errors) |
+
+Model refinements recorded as negative results (not product defects): the cron
+and `.desktop` adapters split on `str.splitlines()`, which also breaks on
+`\x0c`, `\x1c`–`\x1e`, `\x85`, U+2028/9. Cron itself breaks only on `\n`.
+No evasion follows (both halves are still analysed), so the single-line model
+excludes those characters instead of changing the adapters.
+
 ## Fault injection (targeted mutation)
 
 The script `.falsicore-audit/mutation.py` (private, not shipped) copies the

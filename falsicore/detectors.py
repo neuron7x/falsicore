@@ -56,7 +56,7 @@ def suspect_command(text: str) -> list[str]:
     return analyze(text)["patterns"]
 
 
-def systemd_execs(content: str) -> list[str]:
+def systemd_execs(content: object) -> list[str]:
     if not isinstance(content, str):
         return []
     lines = []
@@ -197,8 +197,8 @@ def dpkg_verify_review(output: str) -> dict:
     Only the third column carries a result in current dpkg; a 'c' marks a
     conffile. Paths are reduced to their first three components.
     """
-    review = {"content_changed_conffiles": 0, "content_changed_other_files": 0,
-              "missing_files": 0, "unverifiable": 0, "unparsed_lines": 0}
+    review: dict[str, Any] = {"content_changed_conffiles": 0, "content_changed_other_files": 0,
+                              "missing_files": 0, "unverifiable": 0, "unparsed_lines": 0}
     prefixes: dict[str, int] = {}
     for line in output.splitlines():
         parts = line.split()

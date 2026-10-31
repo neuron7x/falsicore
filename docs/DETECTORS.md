@@ -57,6 +57,23 @@ use `COLLECTOR_ERROR`.
 - `UNSAFE_BROWSER_LAUNCH_FLAG` separates `sandbox_reduced`, `debug_channel`
   (`pipe` or `port`), `debug_port` and `debug_port_listener`.
 
+## Shell analyser vocabularies (0.1.4)
+
+`shell_syntax.analyze` emits only codes from two closed sets (property-tested on
+arbitrary input, `tests/test_properties.py`):
+
+- patterns `PATTERN_CODES`: `TEMP_PATH_IN_EXECUTION`, `REMOTE_SCRIPT_PIPELINE`,
+  `BASE64_DECODE_EXECUTION_CONTEXT`, `RISKY_EXECUTION_FLAG`;
+- limitations `LIMITATION_CODES`: `TOKEN_LIMIT`, `UNTERMINATED_HEREDOC`,
+  `UNPARSED_QUOTING`, `EXPANSION_NOT_RESOLVED`, `INLINE_INTERPRETER_CODE_NOT_ANALYZED`,
+  `MISSING_SHELL_COMMAND_OPERAND`, `HEREDOC_EXPANSION_NOT_RESOLVED`, `NESTING_LIMIT`,
+  `INPUT_LIMIT`, `INCOMPLETE_CONTINUATION`, `NUL_IN_INPUT`.
+
+Any limitation makes the owning check `PARTIAL` with `PARSE_UNSUPPORTED` (or
+`PACKAGE_ATTESTED_NOT_PARSED` for a root-owned file equal to its dpkg record).
+`NUL_IN_INPUT`: NUL bytes are removed before lexing because NUL is the
+analyser's private marker byte; input can therefore never forge a marker.
+
 `falsicore/guide.py` holds the Ukrainian interpretation of every rule: the
 observation, benign alternatives, uncertainty, priority P1–P3 and a
 non-destructive step. A test enforces that every emitted rule has an entry.

@@ -301,7 +301,7 @@ class Audit:
         else:
             gaps.add("TOOL_FAILED")
 
-    def command(self, tool: str, args: list[str], timeout: int = 12, limit: int = 2*1024*1024) -> dict:
+    def command(self, tool: str, args: list[str], timeout: float = 12, limit: int = 2*1024*1024) -> dict:
         if not _allowed_audit_invocation(tool, args):
             raise PermissionError("Collector command is not an approved read-only probe")
         if self.deadline is not None:
@@ -1125,9 +1125,11 @@ class Audit:
             granted = {k: sorted(x for x in granted_raw.get(k, []) if isinstance(x, str))[:60]
                        for k in ("api", "explicit_host", "scriptable_host") if isinstance(granted_raw.get(k, []), list)}
         withheld = setting.get("withholding_permissions")
+        location = setting.get("location")
         return {"enabled": enabled, "granted": granted,
                 "withheld_host_permissions": withheld if isinstance(withheld, bool) else "UNKNOWN",
-                "install_location": CHROMIUM_LOCATIONS.get(setting.get("location"), "UNKNOWN"),
+                "install_location": CHROMIUM_LOCATIONS.get(location, "UNKNOWN")
+                if isinstance(location, int) and not isinstance(location, bool) else "UNKNOWN",
                 "from_webstore": setting.get("from_webstore") if isinstance(setting.get("from_webstore"), bool) else "UNKNOWN"}
 
     def _extension_name(self, manifest: dict, version_dir: Path) -> dict:
@@ -1372,7 +1374,8 @@ class Audit:
                             "optional_permissions": sorted(x for x in optional.get("permissions", []) if isinstance(x, str))[:60]
                             if isinstance(optional, dict) and isinstance(optional.get("permissions"), list) else [],
                             "install_location": str(addon.get("location", "UNKNOWN"))[:40],
-                            "signed_state": FIREFOX_SIGNED_STATES.get(signed, "UNKNOWN"),
+                            "signed_state": FIREFOX_SIGNED_STATES.get(signed, "UNKNOWN")
+                            if isinstance(signed, int) and not isinstance(signed, bool) else "UNKNOWN",
                             "native_hosts_allowing": sorted(self.native_hosts_by_extension.get(raw_id, [])),
                         }
                         self.finding("POWERFUL_FIREFOX_EXTENSION", "medium",

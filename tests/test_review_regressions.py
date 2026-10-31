@@ -298,7 +298,7 @@ class CoverageVocabulary(unittest.TestCase):
 
     def test_verdict_reachable_when_only_scope_limits_remain(self):
         coverage = [{"check": c, "status": "COMPLETED", "scope_limits": {"REQUIRES_SYSTEM_SCOPE": 1}}
-                    for c in ("processes", "network", "persistence", "browsers", "auth", "packages")]
+                    for c in ("processes", "network", "persistence", "browsers", "auth", "packages", "crossview")]
         self.assertEqual(detectors.interpret_verdict([], coverage), "NO_COMPROMISE_INDICATORS_OBSERVED")
         coverage[0] = {"check": "processes", "status": "PARTIAL", "reason_codes": {"TIMEOUT": 1}}
         self.assertEqual(detectors.interpret_verdict([], coverage), "INCONCLUSIVE_DUE_TO_VISIBILITY_LIMITATIONS")

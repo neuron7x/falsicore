@@ -42,7 +42,7 @@ RESULT_FILE = ROOT / "docs" / "DETECTION_VALIDITY.json"
 SCHEMA = "falsicore.detection-validity.v1"
 UID = 24680
 USER = "fixture"
-ESSENTIAL = ("processes", "network", "persistence", "browsers", "auth", "packages")
+ESSENTIAL = ("processes", "network", "persistence", "browsers", "auth", "packages", "crossview")
 
 STAT_TAIL = ("S {ppid} 1 1 0 -1 4194560 100 0 0 0 1 1 0 0 20 0 1 0 {start} 10000000 500 "
              "18446744073709551615 1 1 0 0 0 0 0 0 0 0 0 0 17 1 0 0 0 0 0 0 0 0 0 0 0 0 0")
@@ -88,8 +88,25 @@ class FixtureHost:
         self.proc = self.root / "proc"
         self.outputs: dict[str, dict] = {}
         self.commands_seen: list[tuple[str, list[str]]] = []
+        self.hidden_pids: set[int] = set()        # known to the kernel oracle, absent from /proc
+        self.lookup_only: dict[int, int] = {}      # pid -> Tgid answered by a direct lookup although unlisted
+        self.ss_listeners: list[str] = []
+        self.procnet_rows: dict[str, list[tuple[str, int]]] = {"tcp": [("0100007F", 631)], "udp": [("3600007F", 53)],
+                                                               "tcp6": [], "udp6": []}
         self.home.mkdir(parents=True)
         self._clean_host()
+
+    def pid_probe(self, pid: int) -> bool:
+        """Stand-in for kill(pid, 0): every /proc entry and thread, plus planted hidden PIDs."""
+        if pid in self.hidden_pids:
+            return True
+        folder = self.proc / str(pid)
+        if folder.is_dir():
+            return True
+        for entry in self.proc.iterdir():
+            if entry.name.isdigit() and (entry / "task" / str(pid)).is_dir():
+                return True
+        return False
 
     # ---- building blocks ---------------------------------------------------
     def file(self, relative: str, text: str, mode: int | None = None) -> Path:
@@ -115,11 +132,32 @@ class FixtureHost:
                 ppid: int = 1, name: str = "proc") -> None:
         folder = self.proc / str(pid)
         folder.mkdir(parents=True, exist_ok=True)
-        (folder / "status").write_text(f"Name:\t{name}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\nPPid:\t{ppid}\n")
+        (folder / "status").write_text(f"Name:\t{name}\nTgid:\t{pid}\nPid:\t{pid}\nPPid:\t{ppid}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
         (folder / "stat").write_text(f"{pid} ({name}) " + STAT_TAIL.format(ppid=ppid, start=1000 + pid) + "\n")
         (folder / "exe").symlink_to(exe)
+        (folder / "task" / str(pid)).mkdir(parents=True, exist_ok=True)
         argv = cmdline if cmdline is not None else [exe]
         (folder / "cmdline").write_bytes(b"".join(a.encode() + b"\0" for a in argv))
+
+    def procnet(self, tcp: list[tuple[str, int]] = (), udp: list[tuple[str, int]] = (),
+                tcp6: list[tuple[str, int]] = (), udp6: list[tuple[str, int]] = ()) -> None:
+        """/proc/net/{tcp,udp}{,6} with the given (hex address, port) listeners."""
+        header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+        for name, rows, state, zero in (("tcp", tcp, "0A", "00000000"), ("udp", udp, "07", "00000000"),
+                                        ("tcp6", tcp6, "0A", "0" * 32), ("udp6", udp6, "07", "0" * 32)):
+            lines = [header] + [f"{i:4d}: {addr}:{port:04X} {zero}:0000 {state} 00000000:00000000 00:00000000 00000000 0 0 {i + 1} 1 0\n"
+                                for i, (addr, port) in enumerate(rows)]
+            self.file(f"/proc/net/{name}", "".join(lines))
+
+    def listen(self, proto: str, address: str, port: int, process: str = "") -> None:
+        """A listening socket visible in BOTH kernel views (ss and /proc/net), as on a real host."""
+        packed = {"0.0.0.0": "00000000", "127.0.0.1": "0100007F", "192.168.1.20": "1401A8C0", "[::]": "0" * 32}[address]
+        state = "LISTEN" if proto == "tcp" else "UNCONN"
+        suffix = f' users:(("{process}",pid=900,fd=3))' if process else ""
+        self.ss_listeners.append(f"{proto} {state} 0 128 {address}:{port} {'[::]:*' if address == '[::]' else '0.0.0.0:*'}{suffix}\n")
+        self.procnet_rows[proto + ("6" if address == "[::]" else "")].append((packed, port))
+        self.command_output("ss", SS_CLEAN + "".join(self.ss_listeners))
+        self.procnet(**self.procnet_rows)
 
     def command_output(self, key: str, stdout: str = "", status: str = "COMPLETED", exit_code: int | None = 0,
                        stderr: str = "") -> None:
@@ -153,6 +191,14 @@ class FixtureHost:
             self.file(f"/proc/sys/kernel/{name}", value + "\n")
         self.file("/proc/modules", "xt_conntrack 12288 1 - Live 0x0000000000000000\nnft_compat 20480 2 - Live 0x0\n")
         self.file("/sys/kernel/security/lsm", "lockdown,capability,landlock,yama,apparmor")
+        # Cross-view inputs of a consistent host.
+        self.file("/proc/sys/kernel/pid_max", "8192\n")
+        for module in ("xt_conntrack", "nft_compat"):
+            self.file(f"/sys/module/{module}/initstate", "live\n")
+        self.file("/sys/module/printk/parameters/time", "N\n")   # built-in: no initstate
+        self.file("/proc/self/mountinfo", "22 1 0:21 / /proc rw,nosuid,nodev,noexec - proc proc rw\n"
+                  "40 22 0:35 / /proc/sys/fs/binfmt_misc rw - autofs systemd-1 rw\n")
+        self.procnet(tcp=[("0100007F", 631)], udp=[("3600007F", 53)])
         self.file("/usr/lib/systemd/system/ssh.service",
                   "[Unit]\nDescription=OpenBSD Secure Shell server\n[Service]\nEnvironmentFile=-/etc/default/ssh\n"
                   "ExecStartPre=/usr/sbin/sshd -t\nExecStart=/usr/sbin/sshd -D $SSHD_OPTS\nExecReload=/usr/sbin/sshd -t\n")
@@ -268,7 +314,7 @@ def _debug_port_listener(findings: list[dict]) -> bool:
           evidence=_debug_port_listener)
 def _(h: FixtureHost) -> None:
     h.process(4248, "/opt/google/chrome/chrome", cmdline=["/opt/google/chrome/chrome", "--remote-debugging-port=9222"], name="chrome")
-    h.command_output("ss", SS_CLEAN + 'tcp LISTEN 0 10 0.0.0.0:9222 0.0.0.0:* users:(("chrome",pid=4248,fd=55))\n')
+    h.listen("tcp", "0.0.0.0", 9222, "chrome")
 
 
 @scenario("browser_no_sandbox", "positive", "UNSAFE_BROWSER_LAUNCH_FLAG", "T1562")
@@ -284,17 +330,17 @@ def _(h: FixtureHost) -> None:
 # ---- network --------------------------------------------------------------------
 @scenario("ssh_listening_everywhere", "positive", "REMOTE_ACCESS_PORT_EXPOSED", "T1021")
 def _(h: FixtureHost) -> None:
-    h.command_output("ss", SS_CLEAN + 'tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=900,fd=3))\n')
+    h.listen("tcp", "0.0.0.0", 22, "sshd")
 
 
 @scenario("vnc_listening_on_lan_address", "positive", "REMOTE_ACCESS_PORT_EXPOSED", "T1021.005")
 def _(h: FixtureHost) -> None:
-    h.command_output("ss", SS_CLEAN + 'tcp LISTEN 0 5 192.168.1.20:5900 0.0.0.0:*\n')
+    h.listen("tcp", "192.168.1.20", 5900)
 
 
 @scenario("ssh_listening_loopback_only", "benign", "REMOTE_ACCESS_PORT_EXPOSED")
 def _(h: FixtureHost) -> None:
-    h.command_output("ss", SS_CLEAN + 'tcp LISTEN 0 128 127.0.0.1:22 0.0.0.0:* users:(("sshd",pid=900,fd=3))\n')
+    h.listen("tcp", "127.0.0.1", 22, "sshd")
 
 
 @scenario("volatile_process_with_public_connection", "positive", ("TEMP_PROCESS_PUBLIC_EGRESS", "EXECUTABLE_IN_VOLATILE_PATH"), "T1071")
@@ -672,6 +718,83 @@ def _(h: FixtureHost) -> None:
     h.file("/etc/apk/repositories", "https://dl-cdn.alpinelinux.org/alpine/v3.20/main --allow-untrusted\n")
 
 
+# ---- cross-view consistency (rootkit hiding) ---------------------------------------------------------
+@scenario("hidden_process_readdir_hook", "positive", "HIDDEN_PROCESS", "T1014",
+          notes="emulated: a plain file system cannot answer a lookup it does not list, so the harness "
+                "injects the Tgid a hooked procfs would return",
+          evidence=lambda fs: any(f["evidence"] == {"how": "LISTING_HIDDEN"} for f in fs))
+def _(h: FixtureHost) -> None:
+    h.hidden_pids.add(6001)
+    h.lookup_only[6001] = 6001
+
+
+@scenario("hidden_process_lookup_hook", "positive", "HIDDEN_PROCESS", "T1014",
+          evidence=lambda fs: any(f["evidence"] == {"how": "LOOKUP_AND_LISTING_HIDDEN"} for f in fs))
+def _(h: FixtureHost) -> None:
+    h.hidden_pids.add(6002)   # kill() confirms it, procfs has no trace at all
+
+
+@scenario("thread_ids_are_not_hidden_processes", "benign", "HIDDEN_PROCESS")
+def _(h: FixtureHost) -> None:
+    for tid in (1301, 1302, 1303):
+        (h.proc / "1300" / "task" / str(tid)).mkdir(parents=True, exist_ok=True)
+
+
+@scenario("hidden_kernel_module", "positive", "HIDDEN_KERNEL_MODULE", "T1014")
+def _(h: FixtureHost) -> None:
+    h.file("/sys/module/diamorphine/initstate", "live\n")   # live in sysfs, absent from /proc/modules
+
+
+@scenario("builtin_module_without_initstate", "benign", "HIDDEN_KERNEL_MODULE")
+def _(h: FixtureHost) -> None:
+    h.file("/sys/module/ext4/parameters/x", "1\n")
+
+
+@scenario("listener_hidden_from_netlink", "positive", "HIDDEN_LISTENER", "T1014",
+          evidence=lambda fs: any(f["evidence"].get("visible_in") == "PROCFS_ONLY" for f in fs))
+def _(h: FixtureHost) -> None:
+    h.procnet(tcp=[("0100007F", 631), ("00000000", 4444)], udp=[("3600007F", 53)])   # ss (SS_CLEAN) lacks 4444
+
+
+@scenario("listener_hidden_from_procfs", "positive", "HIDDEN_LISTENER", "T1014",
+          evidence=lambda fs: any(f["evidence"].get("visible_in") == "NETLINK_ONLY" for f in fs))
+def _(h: FixtureHost) -> None:
+    h.command_output("ss", SS_CLEAN + 'tcp LISTEN 0 5 0.0.0.0:31337 0.0.0.0:*\n')
+
+
+@scenario("listener_in_both_views", "benign", "HIDDEN_LISTENER")
+def _(h: FixtureHost) -> None:
+    h.listen("tcp", "0.0.0.0", 8080, "python3")
+    h.listen("tcp", "[::]", 8081)
+
+
+@scenario("mount_over_proc_pid", "positive", "PROC_PID_MOUNT_OVERLAY", "T1564.001")
+def _(h: FixtureHost) -> None:
+    h.file("/proc/self/mountinfo", "22 1 0:21 / /proc rw - proc proc rw\n90 22 0:50 / /proc/6003 rw - tmpfs tmpfs rw\n")
+
+
+@scenario("binfmt_misc_mount_under_proc", "benign", "PROC_PID_MOUNT_OVERLAY")
+def _(h: FixtureHost) -> None:
+    h.file("/proc/self/mountinfo", "22 1 0:21 / /proc rw - proc proc rw\n40 22 0:35 / /proc/sys/fs/binfmt_misc rw - autofs systemd-1 rw\n")
+
+
+# ---- auth without journald -------------------------------------------------------------------------------
+@scenario("syslog_file_ssh_login_without_journald", "positive", "REMOTE_AUTHENTICATION_REVIEW", "T1078",
+          notes="journalctl absent (Alpine/Void): /var/log/auth.log is the fallback target")
+def _(h: FixtureHost) -> None:
+    h.outputs.pop("journalctl:auth")
+    h.outputs.pop("journalctl:kernel")
+    h.file("/var/log/auth.log", "Nov  1 09:12:01 host sshd[900]: Accepted publickey for fixture from 1.1.1.1 port 51022 ssh2\n"
+           "Nov  1 09:12:01 host sshd[900]: pam_unix(sshd:session): session opened for user fixture\n")
+
+
+@scenario("syslog_file_without_logins", "benign", "REMOTE_AUTHENTICATION_REVIEW")
+def _(h: FixtureHost) -> None:
+    h.outputs.pop("journalctl:auth")
+    h.outputs.pop("journalctl:kernel")
+    h.file("/var/log/auth.log", "Nov  1 09:12:01 host CRON[1200]: pam_unix(cron:session): session opened for user root\n")
+
+
 # ---- runner --------------------------------------------------------------------------------------
 def make_audit(host: FixtureHost) -> Audit:
     pw = SimpleNamespace(pw_uid=UID, pw_dir=str(host.home), pw_name=USER)
@@ -682,12 +805,17 @@ def make_audit(host: FixtureHost) -> Audit:
          patch("falsicore.collectors.os.getuid", return_value=euid):
         audit = Audit(host.scope, target_user=USER, profile=host.profile, root=host.root)
     audit.command = host.fake_command  # type: ignore[method-assign]
+    audit.pid_probe = host.pid_probe
+    if host.lookup_only:
+        original_lookup = audit._tgid_of
+        audit._tgid_of = lambda pid: host.lookup_only[pid] if pid in host.lookup_only else original_lookup(pid)  # type: ignore[method-assign]
     return audit
 
 
 def run_host(host: FixtureHost) -> dict:
     audit = make_audit(host)
-    with patch("falsicore.collectors._in_journal_reader_group", return_value=True):
+    with patch("falsicore.collectors._in_journal_reader_group", return_value=True), \
+         patch("falsicore.collectors.PID_RECHECK_DELAY", 0):
         audit.scan()
     summary = report.report_data(audit)
     return {"audit": audit, "findings": report.stable_findings(audit.findings), "coverage": audit.coverage,

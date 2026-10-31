@@ -304,7 +304,7 @@ def interpret_verdict(findings: list[dict], coverage: list[dict]) -> str:
     medium = [f for f in findings if f.get("kind", "INDICATOR") == "INDICATOR" and f.get("severity") == "medium"]
     if strong or medium:
         return "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION"
-    essential = {"processes", "network", "persistence", "browsers", "auth", "packages"}
+    essential = {"processes", "network", "persistence", "browsers", "auth", "packages", "crossview"}
     incomplete = [x for x in coverage if x.get("check") in essential and x.get("status") != "COMPLETED"]
     observed = {x.get("check") for x in coverage}
     if incomplete or (essential - observed):

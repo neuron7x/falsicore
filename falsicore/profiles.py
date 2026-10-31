@@ -5,7 +5,7 @@ from typing import TypedDict
 
 COLLECTOR_ORDER = (
     "environment", "processes", "network", "persistence",
-    "browsers", "auth", "packages", "kernel",
+    "browsers", "auth", "packages", "kernel", "crossview",
 )
 
 
@@ -20,7 +20,7 @@ class Profile(TypedDict):
 # Quick deliberately omits slower historical/package assessment. It is not a full audit.
 PROFILES: dict[str, Profile] = {
     "quick": {
-        "checks": ("environment", "processes", "network", "persistence", "browsers"),
+        "checks": ("environment", "processes", "network", "persistence", "browsers", "crossview"),
         "duration_seconds": 35,
         "journal_lines": 0,
         "max_file_visits": 1100,

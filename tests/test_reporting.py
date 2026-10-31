@@ -12,7 +12,7 @@ class ReportingTests(unittest.TestCase):
     def fake(self):
         return SimpleNamespace(
             scope="user", started_utc="2026-10-27T00:00:00+00:00",
-            coverage=[{"check": x, "status": "COMPLETED", "details": "fixture"} for x in ("processes","network","persistence","browsers","auth","packages")],
+            coverage=[{"check": x, "status": "COMPLETED", "details": "fixture"} for x in ("processes","network","persistence","browsers","auth","packages","crossview")],
             findings=[], dropped_findings=0,
             stats={"host": {"kernel": "fixture"}},
             baseline={"listeners": ["tcp/22"], "process_exe_hashes":[], "systemd_units":[], "cron_entry_hashes":[], "ssh_key_fingerprints":[],"browser_extensions":[],"native_hosts":[]},
@@ -20,7 +20,7 @@ class ReportingTests(unittest.TestCase):
         )
 
     def test_report_schema(self):
-        self.assertEqual(report_data(self.fake())["schema"], "falsicore.summary.v4")
+        self.assertEqual(report_data(self.fake())["schema"], "falsicore.summary.v5")
 
     def test_no_claim_of_compromise(self):
         self.assertFalse(report_data(self.fake())["confirmed_compromise"])

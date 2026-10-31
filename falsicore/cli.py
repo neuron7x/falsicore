@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import __version__
 from .collectors import Audit
-from .profiles import PROFILES
+from .profiles import COLLECTOR_ORDER, PROFILES
 from . import monitor
 from . import guide
 from .report import LEGACY_SCHEMAS, SCHEMA, load_verified_summary, write_reports, verify_reports
@@ -207,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         print("NO automatic sudo | NO socket connections | NO installs | NO uploads | NO suspicious-code execution")
         print("Private reports 0700/0600; raw endpoint/path mapping stays in private_index.json.")
         for key, profile in PROFILES.items():
-            print(f"{key}: {profile['duration_seconds']}s budget, {len(profile['checks'])}/8 collectors, journal limit={profile['journal_lines']}")
+            print(f"{key}: {profile['duration_seconds']}s budget, {len(profile['checks'])}/{len(COLLECTOR_ORDER)} collectors, journal limit={profile['journal_lines']}")
         print("System/root scope opt-in, with --target-user. Advanced/remote compromise cannot be excluded.")
         return 0
     if args.action == "monitor":
@@ -264,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
             progress = Progress(audit)
             budget = args.max_seconds or PROFILES[args.profile]["duration_seconds"]
             progress(f"FALSICORE {__version__} | profile={args.profile} | scope={args.scope} | uid={os.geteuid()} | "
-                     f"whole-scan budget={budget}s | collectors={len(PROFILES[args.profile]['checks'])}/8")
+                     f"whole-scan budget={budget}s | collectors={len(PROFILES[args.profile]['checks'])}/{len(COLLECTOR_ORDER)}")
             progress(f"private run directory: {run_dir}")
             with progress:
                 audit.scan(progress=progress)

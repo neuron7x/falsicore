@@ -51,7 +51,7 @@ class CollectorBoundaries(unittest.TestCase):
 
         self.a.environment = good
         self.a.processes = bad
-        for name in ("network", "persistence", "browsers", "auth", "packages", "kernel"):
+        for name in ("network", "persistence", "browsers", "auth", "packages", "kernel", "crossview"):
             setattr(self.a, name, lambda n=name: self.a.checked(n, "COMPLETED", "fixture"))
         self.a.scan()
         checks = [entry["check"] for entry in self.a.coverage]
@@ -66,7 +66,7 @@ class CollectorBoundaries(unittest.TestCase):
 
     def test_missing_coverage_from_collector_fail_closed(self):
         self.a.environment = lambda: None
-        for name in ("processes", "network", "persistence", "browsers", "auth", "packages", "kernel"):
+        for name in ("processes", "network", "persistence", "browsers", "auth", "packages", "kernel", "crossview"):
             setattr(self.a, name, lambda n=name: self.a.checked(n, "COMPLETED", "fixture"))
         self.a.scan()
         self.assertEqual(self.a.coverage[0]["status"], "FAILED")
@@ -79,7 +79,7 @@ class CollectorBoundaries(unittest.TestCase):
             self.a.baseline["listeners"].append("partial")
 
         self.a.environment = silent
-        for name in ("processes", "network", "persistence", "browsers", "auth", "packages", "kernel"):
+        for name in ("processes", "network", "persistence", "browsers", "auth", "packages", "kernel", "crossview"):
             setattr(self.a, name, lambda n=name: self.a.checked(n, "COMPLETED", "fixture"))
         self.a.scan()
         self.assertEqual(self.a.coverage[0]["status"], "FAILED")
@@ -91,7 +91,7 @@ class CollectorBoundaries(unittest.TestCase):
     def test_exhausted_budget_marks_all_collectors_skipped(self):
         self.a.over_budget = lambda: True
         self.a.scan()
-        self.assertEqual(len(self.a.coverage), 8)
+        self.assertEqual(len(self.a.coverage), 9)
         self.assertTrue(all(c["status"] == "SKIPPED" for c in self.a.coverage))
 
     def test_command_budget_exhausted_does_not_start_subprocess(self):

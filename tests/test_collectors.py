@@ -186,11 +186,11 @@ class CollectorFixtureTests(unittest.TestCase):
 
     def test_scan_exception_is_a_coverage_gap(self):
         self.a.environment = lambda: (_ for _ in ()).throw(RuntimeError("fixture"))
-        for name in ("processes", "network", "persistence", "browsers", "auth", "packages", "kernel"):
+        for name in ("processes", "network", "persistence", "browsers", "auth", "packages", "kernel", "crossview"):
             setattr(self.a, name, lambda n=name: self.a.checked(n, "COMPLETED", "fixture"))
         self.a.scan()
         self.assertEqual(self.a.coverage[0]["status"], "FAILED")
-        self.assertEqual(len(self.a.coverage), 8)
+        self.assertEqual(len(self.a.coverage), 9)
 
     def test_exhausted_findings_reported(self):
         self.a.findings = [{} for _ in range(350)]

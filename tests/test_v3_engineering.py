@@ -21,7 +21,7 @@ from falsicore.report import (
     find_baseline, comparable, stable_findings, _analysis_digest,
 )
 
-ESSENTIAL = ("processes", "network", "persistence", "browsers", "auth", "packages")
+ESSENTIAL = ("processes", "network", "persistence", "browsers", "auth", "packages", "crossview")
 
 
 def fixture(coverage_status="COMPLETED", findings=None, uid=1000, profile="standard", scope="user"):
@@ -293,7 +293,7 @@ class CollectorProfilesTests(unittest.TestCase):
         for name in config_for("quick")["checks"]:
             setattr(a, name, lambda n=name: a.checked(n, "COMPLETED", "fixture"))
         a.scan()
-        self.assertEqual(len([x for x in a.coverage if x["check"] in COLLECTOR_ORDER]),8)
+        self.assertEqual(len([x for x in a.coverage if x["check"] in COLLECTOR_ORDER]),9)
         self.assertEqual({x["status"] for x in a.coverage if x["check"] in ("auth","packages","kernel")},{"SKIPPED"})
 
     def test_failed_collector_recorded(self):

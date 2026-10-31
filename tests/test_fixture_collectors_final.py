@@ -191,6 +191,7 @@ class JournalAndPackageFixtures(unittest.TestCase):
     def test_absent_journal_is_inconclusive(self):
         with tempfile.TemporaryDirectory() as td:
             audit = make_audit(Path(td))
+            audit.root = Path(td)  # no journald and no syslog files under this root
             audit.command = lambda *a, **k: {"status": "UNAVAILABLE", "stdout": "", "exit": None}
             audit.auth()
             self.assertEqual(audit.coverage[-1]["status"], "UNAVAILABLE")

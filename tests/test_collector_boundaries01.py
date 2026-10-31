@@ -261,7 +261,7 @@ class CollectorBoundaries(unittest.TestCase):
         self.a.command = lambda *_a, **_k: {"status": "PARTIAL", "stdout": "??5?????? /usr/bin/example\n",
                                              "exit": 1, "error": "", "truncated": False}
         self.a.packages()
-        self.assertIn("DPKG_FILE_DRIFT", {x["rule"] for x in self.a.findings})
+        self.assertIn("PACKAGE_FILE_DRIFT", {x["rule"] for x in self.a.findings})
         # Non-configuration drift is an indicator to corroborate, not a confirmed compromise.
         self.assertEqual(self.a.findings[-1]["kind"], "INDICATOR")
         self.assertEqual(self.a.findings[-1]["classification"], "SUSPICIOUS_UNCONFIRMED")

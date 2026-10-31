@@ -56,27 +56,6 @@
       "known_gaps": 0,
       "positives": 1
     },
-    "DPKG_CONFFILE_CHANGED": {
-      "benign_twins": 1,
-      "detected": 1,
-      "false_alarms": 0,
-      "known_gaps": 0,
-      "positives": 1
-    },
-    "DPKG_FILES_MISSING": {
-      "benign_twins": 1,
-      "detected": 1,
-      "false_alarms": 0,
-      "known_gaps": 0,
-      "positives": 1
-    },
-    "DPKG_FILE_DRIFT": {
-      "benign_twins": 1,
-      "detected": 1,
-      "false_alarms": 0,
-      "known_gaps": 0,
-      "positives": 1
-    },
     "EXECUTABLE_IN_VOLATILE_PATH": {
       "benign_twins": 1,
       "detected": 3,
@@ -84,12 +63,12 @@
       "known_gaps": 0,
       "positives": 3
     },
-    "INSECURE_APT_REPOSITORY_SETTING": {
+    "INSECURE_PACKAGE_SOURCE_SETTING": {
       "benign_twins": 1,
-      "detected": 1,
+      "detected": 4,
       "false_alarms": 0,
       "known_gaps": 0,
-      "positives": 1
+      "positives": 4
     },
     "INVALID_EXTENSION_MANIFEST": {
       "benign_twins": 0,
@@ -104,6 +83,34 @@
       "false_alarms": 0,
       "known_gaps": 0,
       "positives": 1
+    },
+    "PACKAGE_CONFFILE_CHANGED": {
+      "benign_twins": 2,
+      "detected": 2,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 2
+    },
+    "PACKAGE_FILES_MISSING": {
+      "benign_twins": 4,
+      "detected": 2,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 2
+    },
+    "PACKAGE_FILE_DRIFT": {
+      "benign_twins": 4,
+      "detected": 4,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 4
+    },
+    "PACKAGE_METADATA_DRIFT": {
+      "benign_twins": 3,
+      "detected": 2,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 2
     },
     "POWERFUL_BROWSER_EXTENSION": {
       "benign_twins": 1,
@@ -227,9 +234,9 @@
   },
   "rules_without_positive_scenario": [],
   "scenario_counts": {
-    "benign": 18,
+    "benign": 21,
     "known_gap": 2,
-    "positive": 38
+    "positive": 48
   },
   "scenarios": [
     {
@@ -1071,11 +1078,11 @@
       "name": "apt_source_trusted_yes",
       "notes": "",
       "observed": [
-        "INSECURE_APT_REPOSITORY_SETTING"
+        "INSECURE_PACKAGE_SOURCE_SETTING"
       ],
       "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
       "rules": [
-        "INSECURE_APT_REPOSITORY_SETTING"
+        "INSECURE_PACKAGE_SOURCE_SETTING"
       ],
       "scope": "user"
     },
@@ -1088,7 +1095,7 @@
       "observed": [],
       "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
       "rules": [
-        "INSECURE_APT_REPOSITORY_SETTING"
+        "INSECURE_PACKAGE_SOURCE_SETTING"
       ],
       "scope": "user",
       "silent": true
@@ -1102,11 +1109,11 @@
       "name": "dpkg_binary_drift",
       "notes": "",
       "observed": [
-        "DPKG_FILE_DRIFT"
+        "PACKAGE_FILE_DRIFT"
       ],
       "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
       "rules": [
-        "DPKG_FILE_DRIFT"
+        "PACKAGE_FILE_DRIFT"
       ],
       "scope": "user"
     },
@@ -1119,11 +1126,11 @@
       "name": "dpkg_conffile_changed",
       "notes": "",
       "observed": [
-        "DPKG_CONFFILE_CHANGED"
+        "PACKAGE_CONFFILE_CHANGED"
       ],
       "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
       "rules": [
-        "DPKG_CONFFILE_CHANGED"
+        "PACKAGE_CONFFILE_CHANGED"
       ],
       "scope": "user"
     },
@@ -1136,11 +1143,11 @@
       "name": "dpkg_files_missing",
       "notes": "",
       "observed": [
-        "DPKG_FILES_MISSING"
+        "PACKAGE_FILES_MISSING"
       ],
       "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
       "rules": [
-        "DPKG_FILES_MISSING"
+        "PACKAGE_FILES_MISSING"
       ],
       "scope": "user"
     },
@@ -1153,12 +1160,231 @@
       "observed": [],
       "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
       "rules": [
-        "DPKG_CONFFILE_CHANGED",
-        "DPKG_FILES_MISSING",
-        "DPKG_FILE_DRIFT"
+        "PACKAGE_CONFFILE_CHANGED",
+        "PACKAGE_FILES_MISSING",
+        "PACKAGE_FILE_DRIFT"
       ],
       "scope": "user",
       "silent": true
+    },
+    {
+      "attack": "T1554",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "rpm_binary_drift",
+      "notes": "",
+      "observed": [
+        "PACKAGE_FILE_DRIFT"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "PACKAGE_FILE_DRIFT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1548.001",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "rpm_mode_changed_only",
+      "notes": "",
+      "observed": [
+        "PACKAGE_METADATA_DRIFT"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "PACKAGE_METADATA_DRIFT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "rpm_clean_verify",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "PACKAGE_FILES_MISSING",
+        "PACKAGE_FILE_DRIFT",
+        "PACKAGE_METADATA_DRIFT"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1195.002",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "dnf_gpgcheck_off",
+      "notes": "",
+      "observed": [
+        "INSECURE_PACKAGE_SOURCE_SETTING"
+      ],
+      "outcome": "INCONCLUSIVE_DUE_TO_VISIBILITY_LIMITATIONS",
+      "rules": [
+        "INSECURE_PACKAGE_SOURCE_SETTING"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1554",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "pacman_binary_drift",
+      "notes": "",
+      "observed": [
+        "PACKAGE_FILE_DRIFT"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "PACKAGE_FILE_DRIFT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "pacman_conffile_changed",
+      "notes": "",
+      "observed": [
+        "PACKAGE_CONFFILE_CHANGED"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "PACKAGE_CONFFILE_CHANGED"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "pacman_binary_missing",
+      "notes": "",
+      "observed": [
+        "PACKAGE_FILES_MISSING"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "PACKAGE_FILES_MISSING"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1548.001",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "pacman_binary_mode_changed",
+      "notes": "",
+      "observed": [
+        "PACKAGE_METADATA_DRIFT"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "PACKAGE_METADATA_DRIFT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "pacman_clean",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "PACKAGE_CONFFILE_CHANGED",
+        "PACKAGE_FILES_MISSING",
+        "PACKAGE_FILE_DRIFT",
+        "PACKAGE_METADATA_DRIFT"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1195.002",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "pacman_siglevel_never",
+      "notes": "",
+      "observed": [
+        "INSECURE_PACKAGE_SOURCE_SETTING"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "INSECURE_PACKAGE_SOURCE_SETTING"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1554",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "apk_binary_drift",
+      "notes": "",
+      "observed": [
+        "PACKAGE_FILE_DRIFT"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "PACKAGE_FILE_DRIFT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "apk_clean",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "PACKAGE_FILES_MISSING",
+        "PACKAGE_FILE_DRIFT",
+        "PACKAGE_METADATA_DRIFT"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1195.002",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "apk_allow_untrusted",
+      "notes": "",
+      "observed": [
+        "INSECURE_PACKAGE_SOURCE_SETTING"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "INSECURE_PACKAGE_SOURCE_SETTING"
+      ],
+      "scope": "user"
     }
   ],
   "schema": "falsicore.detection-validity.v1",

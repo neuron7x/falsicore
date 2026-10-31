@@ -183,10 +183,10 @@ class JournalAndPackageFixtures(unittest.TestCase):
             audit.packages()
             self.assertIn("REQUIRES_SYSTEM_SCOPE", audit.coverage[-1]["scope_limits"])
             self.assertEqual(audit.stats["repos"]["insecure_source_files"], 1)
-            self.assertIn("INSECURE_APT_REPOSITORY_SETTING", {f["rule"] for f in audit.findings})
+            self.assertIn("INSECURE_PACKAGE_SOURCE_SETTING", {f["rule"] for f in audit.findings})
             # A changed conffile is context; the unreadable file is a user-scope limit.
-            self.assertIn("DPKG_CONFFILE_CHANGED", {f["rule"] for f in audit.findings})
-            self.assertNotIn("DPKG_FILE_DRIFT", {f["rule"] for f in audit.findings})
+            self.assertIn("PACKAGE_CONFFILE_CHANGED", {f["rule"] for f in audit.findings})
+            self.assertNotIn("PACKAGE_FILE_DRIFT", {f["rule"] for f in audit.findings})
 
     def test_absent_journal_is_inconclusive(self):
         with tempfile.TemporaryDirectory() as td:

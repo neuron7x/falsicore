@@ -19,9 +19,10 @@ Examples of detector IDs:
 | `SYSTEM_LOADER_PRELOAD` | system dynamic-loader preload configured | instrumentation/compatibility |
 | `POWERFUL_BROWSER_EXTENSION` | powerful browser extension API/host access | legitimate extension with broad permissions |
 | `REMOTE_ACCESS_PORT_EXPOSED` | remote-access listener on a non-loopback bind | intentionally enabled SSH/RDP/VNC |
-| `INSECURE_APT_REPOSITORY_SETTING` | APT source override of signature trust | exceptional test repository |
-| `DPKG_FILE_DRIFT` | non-configuration package file differs from its dpkg md5 (deep) | local patch, interrupted upgrade |
-| `DPKG_CONFFILE_CHANGED` / `DPKG_FILES_MISSING` | edited conffiles / recorded files absent (deep, context) | admin configuration / leftover modules of removed kernels |
+| `INSECURE_PACKAGE_SOURCE_SETTING` | package source disables signature or transport trust (apt `trusted=yes`/`Allow-Insecure`, dnf `gpgcheck=0`/`sslverify=0`, pacman `SigLevel Never`/`TrustAll`, apk `--allow-untrusted`); evidence names the manager and the codes | exceptional test repository |
+| `PACKAGE_FILE_DRIFT` | non-configuration package file differs from the package database record (deep; dpkg `--verify`, rpm `-Va`, pacman mtree sha256, apk sha1) | local patch, interrupted upgrade, prelink |
+| `PACKAGE_CONFFILE_CHANGED` / `PACKAGE_FILES_MISSING` | edited conffiles / recorded files absent (deep, context) | admin configuration / leftover modules of removed kernels |
+| `PACKAGE_METADATA_DRIFT` | mode, owner, size or link target of a packaged file differs while content matches (deep, context) | administrator hardening; a new setuid bit is the case to review |
 
 **Coverage:** quick profile intentionally omits authentication, package and kernel history. Standard/deep are snapshots rather than continuous EDR. Remote account sessions, encrypted communication contents, advanced rootkits and full disk provenance are out of scope.
 
@@ -115,6 +116,19 @@ property-tested on arbitrary bytes/text):
   (`APT_TRUSTED_YES`, `APT_ALLOW_*`, `DNF_*_OFF`, `PACMAN_SIGLEVEL_NEVER`,
   `PACMAN_TRUSTALL`, `PACMAN_SIGLEVEL_OPTIONAL`, `APK_ALLOW_UNTRUSTED`);
   comments are inert; a setting the manager would reject may still be listed.
+
+The collector wires these in (0.1.4): `detect_managers` decides which
+databases exist; repository configuration of every manager present is read
+(`/etc/apt/*`, `/etc/yum.repos.d/*.repo`, `/etc/dnf/dnf.conf`,
+`/etc/pacman.conf`, `/etc/pacman.d/*.conf`, `/etc/apk/repositories`); in the
+deep profile dpkg and rpm are verified through their own allowlisted
+read-only commands (`dpkg --verify`, `rpm -Va`) while pacman and apk, which
+have no such command, are verified by comparing recorded digests with the
+files on disk inside fixed bounds (`VERIFY_PREFIXES`: executables, systemd
+units, `/etc`; 20 000 files; 512 MiB; 8 MiB per file; the scan budget).
+Package attestation of start-up files (`PACKAGE_ATTESTED_NOT_PARSED`) uses the
+same records: dpkg md5, pacman sha256/md5, apk sha1/sha256; rpm hosts never
+attest, because rpm's database is binary and is not parsed.
 
 **What a package-database digest proves.** Equality of a file with its
 recorded md5 (dpkg, pacman), sha1 (apk) or sha256 (pacman, rpm) is a

@@ -88,3 +88,40 @@ are limitations only.
 `falsicore/guide.py` holds the Ukrainian interpretation of every rule: the
 observation, benign alternatives, uncertainty, priority P1–P3 and a
 non-destructive step. A test enforces that every emitted rule has an entry.
+
+## Package databases beyond dpkg (`falsicore/packages.py`, 0.1.4)
+
+Pure, total, bounded helpers the collector wires in; none runs a package
+manager, follows a symlink, or touches the network (`tests/test_packages.py`,
+property-tested on arbitrary bytes/text):
+
+- `detect_managers(root)` — which databases exist, by file presence only
+  (`dpkg`: `var/lib/dpkg/status`; `rpm`: a `Packages`, `Packages.db` or
+  `rpmdb.sqlite` inside `var/lib/rpm/` or `usr/lib/sysimage/rpm/`; `pacman`:
+  `var/lib/pacman/local/`; `apk`: `lib/apk/db/installed`). A symlinked
+  component makes a marker absent; `[]` means no marker, not "nothing
+  installed".
+- `parse_pacman_mtree(raw)` — libarchive mtree (`/set`, `/unset`, vis(3)
+  escapes, `type=dir|link` recorded with their type) → `{path: {type, mode,
+  uid, gid, size, md5, sha256, link}}` plus `{lines, malformed, truncated}`;
+  200 000-line bound; a line with one malformed keyword is dropped whole.
+- `parse_apk_installed(raw)` — apk-tools 2.x text index → packages and
+  `{path: {package, sha1_b64, uid, gid, mode}}`; apk hashes a symlink's
+  target string, not a file; apk-tools 3 ADB databases are not parsed.
+- `rpm_verify_review(output)` — `rpm -Va` lines, same shape as
+  `dpkg_verify_review` plus `metadata_changed_only` and
+  `dependency_problems`; every non-blank line lands in exactly one counter.
+- `detect_insecure_repo_settings(name, content)` — closed code set
+  (`APT_TRUSTED_YES`, `APT_ALLOW_*`, `DNF_*_OFF`, `PACMAN_SIGLEVEL_NEVER`,
+  `PACMAN_TRUSTALL`, `PACMAN_SIGLEVEL_OPTIONAL`, `APK_ALLOW_UNTRUSTED`);
+  comments are inert; a setting the manager would reject may still be listed.
+
+**What a package-database digest proves.** Equality of a file with its
+recorded md5 (dpkg, pacman), sha1 (apk) or sha256 (pacman, rpm) is a
+consistency check between two root-owned artefacts on the same disk. An
+adversary with root rewrites the file *and* its record so they agree; md5 and
+sha1 are not collision resistant. A match therefore means "unchanged since
+recorded unless deliberately forged"; a mismatch means "differs from the
+record" and says nothing about who changed it or why (local patch, prelink,
+interrupted upgrade, administrator edit). Signed package files from an
+independent mirror are the only stronger reference and are out of scope.

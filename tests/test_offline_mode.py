@@ -20,7 +20,8 @@ from unittest.mock import patch
 from falsicore import cli, collectors, report
 from falsicore.collectors import Audit, _allowed_audit_invocation
 
-PASSWD = "root:x:0:0:root:/root:/bin/bash\nalice:x:1500:1500:Alice:/home/alice:/bin/bash\n"
+# Fixture account table of the image (no secrets: the second field is the shadow marker "x").
+IMAGE_ACCOUNTS = "root:x:0:0:root:/root:/bin/bash\nalice:x:1500:1500:Alice:/home/alice:/bin/bash\n"
 
 
 class OfflineImage(unittest.TestCase):
@@ -28,7 +29,7 @@ class OfflineImage(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / "image"
-        self.write("/etc/passwd", PASSWD)
+        self.write("/etc/passwd", IMAGE_ACCOUNTS)
         self.write("/etc/os-release", "ID=debian\nVERSION_ID=\"12\"\n")
         self.write("/etc/machine-id", "ffffffffffffffffffffffffffffffff\n")
         (self.root / "home/alice").mkdir(parents=True)

@@ -32,7 +32,11 @@ jobs:
           python tools/build_release.py --check-manifest
       - name: Syntax
         run: python -m compileall -q falsicore falsicore.py tools
-      - name: Unit, adversarial and lifecycle tests
+      - name: Install property-testing library (CI only; the tool stays stdlib)
+        run: python -m pip install --disable-pip-version-check hypothesis==6.135.26
+      - name: Unit, adversarial, lifecycle and property tests
+        env:
+          FALSICORE_REQUIRE_HYPOTHESIS: "1"
         run: python -m unittest discover -s tests -q
       - name: Supplementary AST pattern audit
         run: python tools/code_audit.py . --fail-on high
@@ -67,12 +71,16 @@ jobs:
       # Exact pins (no hash lock: transitive wheels differ per platform). CI only;
       # the shipped tool has no third-party dependencies.
       - name: Install pinned analysis tools (CI only)
-        run: python -m pip install --disable-pip-version-check coverage==7.13.3 ruff==0.15.22 bandit==1.8.6
+        run: python -m pip install --disable-pip-version-check coverage==7.13.3 ruff==0.15.22 bandit==1.8.6 mypy==1.18.2 hypothesis==6.135.26
       - name: Correctness lint (pyflakes/bugbear subset)
         run: python -m ruff check --select F,E9,B,PLE falsicore tools falsicore.py
       - name: Security analyzer
         run: python -m bandit -q -r falsicore tools falsicore.py -c pyproject.toml
+      - name: Static types (zero errors on the runtime package)
+        run: python -m mypy
       - name: Branch-aware coverage gate
+        env:
+          FALSICORE_REQUIRE_HYPOTHESIS: "1"
         run: |
           python -m coverage run --branch --source=falsicore -m unittest discover -s tests -q
           python -m coverage report -m --fail-under=88

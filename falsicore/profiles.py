@@ -1,13 +1,24 @@
 """Fixed, inspectable collection profiles; they are coverage policies, not risk scores."""
 from __future__ import annotations
 
+from typing import TypedDict
+
 COLLECTOR_ORDER = (
     "environment", "processes", "network", "persistence",
     "browsers", "auth", "packages", "kernel",
 )
 
+
+class Profile(TypedDict):
+    checks: tuple[str, ...]
+    duration_seconds: int
+    journal_lines: int
+    max_file_visits: int
+    max_processes: int
+
+
 # Quick deliberately omits slower historical/package assessment. It is not a full audit.
-PROFILES = {
+PROFILES: dict[str, Profile] = {
     "quick": {
         "checks": ("environment", "processes", "network", "persistence", "browsers"),
         "duration_seconds": 35,
@@ -32,7 +43,7 @@ PROFILES = {
 }
 
 
-def config_for(name: str) -> dict:
+def config_for(name: str) -> Profile:
     if name not in PROFILES:
         raise ValueError("Unknown audit profile")
-    return dict(PROFILES[name])
+    return PROFILES[name].copy()

@@ -37,6 +37,19 @@ MAX_INPUT = 131_072
 MAX_DEPTH = 4
 MAX_TOKENS = 8192
 
+# Closed vocabularies. `analyze` emits nothing outside these two sets; a
+# property test enforces it on arbitrary input.
+PATTERN_CODES = frozenset({
+    "TEMP_PATH_IN_EXECUTION", "REMOTE_SCRIPT_PIPELINE",
+    "BASE64_DECODE_EXECUTION_CONTEXT", "RISKY_EXECUTION_FLAG",
+})
+LIMITATION_CODES = frozenset({
+    "TOKEN_LIMIT", "UNTERMINATED_HEREDOC", "UNPARSED_QUOTING", "EXPANSION_NOT_RESOLVED",
+    "INLINE_INTERPRETER_CODE_NOT_ANALYZED", "MISSING_SHELL_COMMAND_OPERAND",
+    "HEREDOC_EXPANSION_NOT_RESOLVED", "NESTING_LIMIT", "INPUT_LIMIT",
+    "INCOMPLETE_CONTINUATION", "NUL_IN_INPUT",
+})
+
 
 def _temporary(value: str) -> bool:
     # Normalize dot segments lexically, without following any filesystem link.
@@ -235,6 +248,11 @@ def _lex(text: str, gaps: set[str]) -> list[Word | Op]:
             if i + 1 < n:
                 cur().text += text[i + 1]
                 cur().quoted = True
+            else:
+                # A bare trailing backslash joins a line that is not there.
+                # Decided here, in lexer state, so a comment ending in a
+                # backslash (skipped above) is not mistaken for a continuation.
+                gaps.add("INCOMPLETE_CONTINUATION")
             i += 2
             continue
         try:
@@ -493,7 +511,9 @@ class _Analysis:
         text = [w.text for w in words]
         name = first.text if first.text == "." else PurePosixPath(first.text).name
         args = words[1:]
-        if name in KEYWORDS_END or name in KEYWORDS_DATA:
+        # Only a bare, unquoted word is a reserved word: "/tmp/done" is a program
+        # that happens to be called "done" (found by property testing, P-5).
+        if not first.quoted and (first.text in KEYWORDS_END or first.text in KEYWORDS_DATA):
             return "", False
         if first.expands:
             # The program that runs is not known statically.
@@ -624,13 +644,18 @@ def _run(text: str, depth: int) -> _Analysis:
     if depth > MAX_DEPTH:
         result.gaps.add("NESTING_LIMIT")
         return result
+    if "\x00" in text:
+        # NUL is the analyser's private marker byte (\x00SUB\x00, \x00PROCSUBn\x00,
+        # \x00VAR:NAME\x00). Input must never be able to forge a marker: a
+        # crafted start-up file could otherwise crash the analyser and turn the
+        # whole persistence check into FAILED. Bash itself drops NUL bytes.
+        text = text.replace("\x00", "")
+        result.gaps.add("NUL_IN_INPUT")
     if len(text) > MAX_INPUT:
         text = text[:MAX_INPUT]
         result.gaps.add("INPUT_LIMIT")
     tokens = _lex(text, result.gaps)
     if tokens and isinstance(tokens[-1], Op) and tokens[-1].op in ("|", "&&", "||"):
-        result.gaps.add("INCOMPLETE_CONTINUATION")
-    if text.rstrip(" \t").endswith("\\") and not text.rstrip(" \t").endswith("\\\\"):
         result.gaps.add("INCOMPLETE_CONTINUATION")
     for pipeline in _pipelines(tokens):
         sources: set[str] = set()

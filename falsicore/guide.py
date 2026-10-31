@@ -244,8 +244,14 @@ def codes_ua(codes: dict) -> str:
 
 
 def identity_line(finding: dict) -> str:
-    """One-line private attribution: who/what the finding is about."""
+    """One-line private attribution: who/what the finding is about.
+
+    Total on any JSON-shaped finding: a malformed evidence block yields an
+    empty line, never an exception (an explain/verify path must not crash).
+    """
     ev = finding.get("evidence", {})
+    if not isinstance(ev, dict):
+        return ""
     ext = ev.get("extension")
     if isinstance(ext, dict):
         parts = [f"{ext.get('name', 'UNKNOWN')} {ext.get('version', '')}".strip(),
@@ -262,7 +268,7 @@ def identity_line(finding: dict) -> str:
         return terminal_safe(f"браузер={ev.get('manifest_owner', '?')}; host={ev['host_name']}; дозволені розширення={','.join(ev.get('allowed_extensions', [])) or '—'}; "
                              f"файл={exe.get('status', 'UNKNOWN')} uid={exe.get('owner_uid', '?')} sha256={str(exe.get('sha256', '?'))[:16]}", 300)
     observations = finding.get("observations") or []
-    if observations:
+    if isinstance(observations, list) and observations and isinstance(observations[0], dict):
         o = observations[0]
         parent = o.get("parent", {}) if isinstance(o.get("parent"), dict) else {}
         line = (f"pid={o.get('pid')} ppid={o.get('ppid')} uid={o.get('uid')} exe={o.get('exe_name')} "
@@ -270,6 +276,8 @@ def identity_line(finding: dict) -> str:
         if ev.get("debug_channel"):
             line += f"; debug={ev['debug_channel']}" + (f":{ev.get('debug_port')} {ev.get('debug_port_listener')}" if ev.get("debug_port") else "")
         return terminal_safe(line, 300)
-    if ev.get("locations"):
-        return terminal_safe("файл=" + str(ev.get("file_name", "?")) + "; рядки=" + ",".join(str(x["line"]) for x in ev["locations"]), 200)
+    locations = ev.get("locations")
+    if isinstance(locations, list) and locations:
+        lines = ",".join(str(x.get("line", "?")) for x in locations if isinstance(x, dict))
+        return terminal_safe("файл=" + str(ev.get("file_name", "?")) + "; рядки=" + lines, 200)
     return ""

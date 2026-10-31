@@ -6,7 +6,7 @@ Local browser identities, credentials, Linux user files, privileged system state
 
 ## Adversaries and events
 
-- Social engineering, malicious extension, browser session theft and browser code execution (not inferred merely from Instagram communication).
+- Social engineering, malicious extension, browser session theft and browser code execution (never inferred from the content of any communication).
 - User-space malware with persistence through services, shell startup, cron, XDG, SSH or remote access software.
 - Privileged compromise capable of altering logs/process tables/files; **beyond live-scan trust**.
 - Malicious or accidentally compromised project ZIP, GitHub workflow or dependency.

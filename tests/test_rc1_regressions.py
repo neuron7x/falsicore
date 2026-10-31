@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from falsicore.detectors import extension_assessment, grants_instagram_access
+from falsicore.detectors import extension_assessment, grants_host_access
 from falsicore.collectors import Audit, _extension_version_key
 
 
@@ -14,21 +14,23 @@ class BrowserHostnameAdversarialTests(unittest.TestCase):
     def test_false_instagram_substring_domain(self):
         for host in ("fakeinstagram.com", "instagram.com.evil.example", "www.instagram.com.evil.example"):
             with self.subTest(host=host):
-                self.assertFalse(grants_instagram_access(f"https://{host}/*"))
-                self.assertFalse(extension_assessment({"permissions": ["cookies"],
-                    "host_permissions": [f"https://{host}/*"]})["instagram_access_potential"])
+                self.assertFalse(grants_host_access(f"https://{host}/*", ("instagram.com", "www.instagram.com", "i.instagram.com", "graph.instagram.com")))
+                self.assertEqual(extension_assessment({"permissions": ["cookies"],
+                    "host_permissions": [f"https://{host}/*"]})["host_scope"], "specific")
 
     def test_real_instagram_apex_and_subdomain(self):
         for p in ("https://instagram.com/*", "https://www.instagram.com/*",
                   "*://*.instagram.com/*", "<all_urls>", "*://*/*"):
             with self.subTest(pattern=p):
-                self.assertTrue(grants_instagram_access(p))
+                self.assertTrue(grants_host_access(p, ("instagram.com", "www.instagram.com", "i.instagram.com", "graph.instagram.com")))
 
-    def test_non_instagram_script_is_not_instagram_exposure(self):
+    def test_content_script_scope_follows_the_pattern_grammar(self):
         manifest = {"content_scripts": [{"matches": ["https://www.instagram.com.evil.example/*"]}]}
-        self.assertFalse(extension_assessment(manifest)["content_script_instagram_access"])
-        manifest["content_scripts"][0]["matches"] = ["https://www.instagram.com/*"]
-        self.assertTrue(extension_assessment(manifest)["content_script_instagram_access"])
+        self.assertEqual(extension_assessment(manifest)["content_script_scope"], "specific")
+        manifest["content_scripts"][0]["matches"] = ["*://*.instagram.com/*"]
+        self.assertEqual(extension_assessment(manifest)["content_script_scope"], "wildcard_domains")
+        manifest["content_scripts"][0]["matches"] = ["<all_urls>"]
+        self.assertEqual(extension_assessment(manifest)["content_script_scope"], "all_urls")
 
 
 class VersionAndVendorUnitsTests(unittest.TestCase):

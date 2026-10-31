@@ -37,7 +37,8 @@ class CoreDetectorTests(unittest.TestCase):
 
     def test_mv3_permission_context(self):
         r = d.extension_assessment({"permissions": ["cookies"], "host_permissions": ["https://www.instagram.com/*"]})
-        self.assertTrue(r["instagram_access_potential"] and r["risk_flag"])
+        self.assertEqual(r["host_scope"], "specific")
+        self.assertTrue(r["risk_flag"])  # a sensitive API on any host is capability to read that site
 
     def test_mv2_host(self):
         r = d.extension_assessment({"permissions": ["<all_urls>", "webRequest"]})
@@ -45,8 +46,11 @@ class CoreDetectorTests(unittest.TestCase):
 
     def test_content_scripts(self):
         r = d.extension_assessment({"content_scripts": [{"matches": ["https://www.instagram.com/*"]}]})
-        self.assertTrue(r["instagram_access_potential"])
-        self.assertTrue(r["risk_flag"])
+        self.assertEqual(r["content_script_scope"], "specific")
+        self.assertFalse(r["risk_flag"])  # a script on one named site without any API is not flagged
+        broad = d.extension_assessment({"content_scripts": [{"matches": ["*://*/*"]}]})
+        self.assertEqual(broad["content_script_scope"], "all_urls")
+        self.assertTrue(broad["risk_flag"])
 
     def test_sensitive_optional_not_installed(self):
         r = d.extension_assessment({"optional_permissions": ["cookies"]})

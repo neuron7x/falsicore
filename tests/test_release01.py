@@ -159,9 +159,9 @@ class ReleaseBoundaryTests(unittest.TestCase):
     def test_detector_only_handles_exact_webextension_domains(self):
         for pattern in ("https://fakeinstagram.com/*", "https://instagram.com.evil.test/*",
                         "https://www.instagram.com.evil.test/*", "http://notinstagram.com/*"):
-            self.assertFalse(detectors.grants_instagram_access(pattern))
+            self.assertFalse(detectors.grants_host_access(pattern, ("instagram.com", "www.instagram.com", "i.instagram.com", "graph.instagram.com")))
         for pattern in ("https://instagram.com/*", "*://*.instagram.com/*", "<all_urls>"):
-            self.assertTrue(detectors.grants_instagram_access(pattern))
+            self.assertTrue(detectors.grants_host_access(pattern, ("instagram.com", "www.instagram.com", "i.instagram.com", "graph.instagram.com")))
 
 
 class CLISurfaceTests(unittest.TestCase):

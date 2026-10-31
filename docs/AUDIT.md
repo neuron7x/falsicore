@@ -26,7 +26,7 @@ point to 0.1.3 code.
 | A-4 | `cli.py` scan | Ctrl-C ended in a raw traceback and left an unexplained empty run folder. | `SCAN CANCELLED`, run path printed, exit 130; owned probe groups are killed | `test_keyboard_interrupt_returns_130_with_run_path`; live SIGINT run (below) |
 | A-5, A-6 | `safety.py` `_run_bounded` | A daemonised grandchild survived a `COMPLETED` probe. The leader was reaped before `killpg`, so its PID or group could be reused. | The leader is observed with `waitid(WNOWAIT)` and never reaped before the final `killpg`; residual members are reported | `test_executor_lifecycle.py` |
 | A-7 | `safety.py` | A death by signal could not be told apart from exit 1. An escaped pipe holder went unlabelled. | `error="signal:SIGSEGV"`; `PIPE_HOLDER_OUTSIDE_GROUP` | same |
-| A-8 | `collectors.py` `scan` | The whole-scan deadline is cooperative. A blocking read inside a collector is not interrupted. | **Not fixed.** Per-command deadlines are clamped to the remaining budget, and an overrun turns into `PARTIAL/BUDGET_EXHAUSTED`. A hard watchdog would need collectors in child processes. | documented limitation |
+| A-8 | `collectors.py` `scan` | The whole-scan deadline was cooperative. A blocking read inside a collector (a FIFO, a hung filesystem) was never interrupted, so the scan could hang past its budget. | **Fixed in 0.1.4.** A one-shot `SIGALRM` armed at budget + grace (5 %, ≥2 s) raises `DeadlineExpired` inside the running collector only; the collector becomes `FAILED/BUDGET_EXHAUSTED` with its observations rolled back, later collectors are `SKIPPED`, the timer is disarmed and the previous handler restored. The executor's cleanup runs under `deferred_alarm()` so a probe group is always killed and reaped. Outside the main thread the scan records `hard_deadline.armed=false` and keeps the cooperative budget. | `test_hard_deadline.py` (FIFO-blocked collector; alarm during a live probe) |
 | A-9 | `safety.py` | stderr was merged into the parsed stdout: journalctl hints were miscounted as malformed, bus errors were shown as a status. | Separate bounded stderr (64 KiB), never parsed as data | `test_stderr_is_separate_from_parsed_stdout` |
 | B-1 | `collectors.py` `processes` | Exposure records kept only the PID, so after the process exited (an observed browser process in the originating incident) it could not be identified. | A pinned `/proc/<pid>` dirfd. Observations capture PID, PPID, UID, `start_ticks` (stat field 22), `boot_id`, executable name, dev:ino, mode, owner, bounded SHA-256, and the parent's start time and name. | `LiveProcessAttribution` (disposable `/tmp` copy of `sleep`) |
 | B-2 | `processes` | A cmdline longer than 8 KiB lost its flags with no record, and the scan reported clean. | 64 KiB bound; overflow counts as `INPUT_TRUNCATED` → PARTIAL | `test_truncated_cmdline_is_incompleteness_not_clean` |
@@ -117,7 +117,7 @@ These are adopted practices. No compliance or certification is claimed.
 | Gate | Status | Evidence / limit |
 |---|---|---|
 | G1 host and user work preserved | PASS | Writes were limited to: the repository working copy; new private run folders (`~/falsicore-runs/run-*` and the agent scratch folder); `.falsicore-audit/`; disposable `/tmp/fc-attr-*` test copies, which are removed after each test. Nothing was deleted from `~/falsicore-runs`. There was no browser, shell, service, package or extension change. |
-| G2 release-blocking defects fixed | PASS | B-1, B-4, B-6 and every major finding above. A-8 stays a documented limitation. |
+| G2 release-blocking defects fixed | PASS | B-1, B-4, B-6 and every major finding above. A-8 was a documented limitation in 0.1.3 and is fixed in 0.1.4. |
 | G3 complete retained suite passes | PASS | 548 discovered / 548 passed / 0 failed / 0 errors / 0 skipped. All 24 baseline test files are kept; 31 now. |
 | G4 positive/negative/failure tests for changed logic | PASS | per-row tests; `test_failure_paths.py` |
 | G5 progress, cancellation, deadlines via real launcher | PASS | `./run.sh` progress and heartbeat. Live SIGINT during `dpkg --verify` (a deep profile run under this account): the scan exited 40 ms later, the owned `dpkg` child was killed, exit 130. |
@@ -151,4 +151,5 @@ detection accuracy.
   reported as `PARSE_UNSUPPORTED`, never guessed.
 - User scope cannot see other accounts' processes or sockets, root-only files,
   or non-dumpable processes of its own account. These appear as scope limits.
-- The global deadline is cooperative (A-8).
+- The hard deadline (A-8) works in the main thread only; a scan driven from
+  another thread keeps the cooperative budget and says so in `stats.hard_deadline`.

@@ -1,6 +1,7 @@
 """No-shell command executor, local private artifact handling, command audit metadata."""
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import errno
 import json
@@ -12,9 +13,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 MAX_COMMAND_OUTPUT = 32 * 1024 * 1024
 MAX_DIAGNOSTIC_OUTPUT = 64 * 1024
@@ -28,6 +30,26 @@ COMMAND_ALLOWLIST = {
 
 def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+
+
+@contextlib.contextmanager
+def deferred_alarm() -> Iterator[None]:
+    """Hold SIGALRM back across a critical cleanup section.
+
+    The hard whole-scan deadline (collectors.scan) raises from a SIGALRM
+    handler. Inside the executor's cleanup that could land between killpg()
+    and reaping and orphan a probe; blocking the signal for those few
+    bounded calls delivers it right after the section instead. Signal masks
+    are per thread and the deadline lives in the main thread only.
+    """
+    if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "pthread_sigmask"):
+        yield
+        return
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
 
 def checked_executable(name: str) -> str | None:
@@ -170,34 +192,35 @@ def _run_bounded(binary: str, args: list[str], timeout: float, limit: int,
         must_kill = True
         raise
     finally:
-        if proc is not None:
-            # The leader is not reaped yet, so the group ID is still ours. Any
-            # member still alive (a daemonized grandchild after a successful
-            # exit included) belongs to this probe and is killed.
-            residual_killed = not must_kill and _group_has_live_members(proc.pid)
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except PermissionError:
-                error = error or "PROCESS_GROUP_CLEANUP_DENIED"
-            try:
-                reaped = proc.wait(timeout=2)
-                if exit_code is None and not must_kill:
-                    exit_code = reaped
-                elif exit_code is None:
-                    exit_code = reaped
-            except subprocess.TimeoutExpired:
-                error = error or "PROCESS_GROUP_REAP_TIMEOUT"
-            if must_kill and selector.get_map():
-                # A pipe holder that escaped the group (setsid) keeps the pipe
-                # open after killpg. Report it instead of waiting for it.
-                if not selector.select(timeout=0.2):
-                    error = (error + ";" if error else "") + "PIPE_HOLDER_OUTSIDE_GROUP"
-            for handle in (proc.stdout, proc.stderr):
-                if handle is not None:
-                    handle.close()
-        selector.close()
+        with deferred_alarm():
+            if proc is not None:
+                # The leader is not reaped yet, so the group ID is still ours. Any
+                # member still alive (a daemonized grandchild after a successful
+                # exit included) belongs to this probe and is killed.
+                residual_killed = not must_kill and _group_has_live_members(proc.pid)
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    error = error or "PROCESS_GROUP_CLEANUP_DENIED"
+                try:
+                    reaped = proc.wait(timeout=2)
+                    if exit_code is None and not must_kill:
+                        exit_code = reaped
+                    elif exit_code is None:
+                        exit_code = reaped
+                except subprocess.TimeoutExpired:
+                    error = error or "PROCESS_GROUP_REAP_TIMEOUT"
+                if must_kill and selector.get_map():
+                    # A pipe holder that escaped the group (setsid) keeps the pipe
+                    # open after killpg. Report it instead of waiting for it.
+                    if not selector.select(timeout=0.2):
+                        error = (error + ";" if error else "") + "PIPE_HOLDER_OUTSIDE_GROUP"
+                for handle in (proc.stdout, proc.stderr):
+                    if handle is not None:
+                        handle.close()
+            selector.close()
 
     return {
         "status": status, "stdout": captured.decode("utf-8", "replace"),

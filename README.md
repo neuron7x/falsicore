@@ -150,8 +150,10 @@ Defects found, fault-injection results and gates are recorded in
   adversary can forge every observation, including dpkg records.
 - **Remote state.** Account sessions on remote services and deleted history
   are out of reach.
-- **Deadline.** The whole-scan deadline is cooperative: probes are
-  hard-bounded, but a blocking read inside a collector is not interrupted.
+- **Deadline.** Probes are hard-bounded. A collector stuck in a blocking
+  call is interrupted by a `SIGALRM` deadline (budget + 5 % grace, ≥2 s) and
+  reported as `FAILED/BUDGET_EXHAUSTED` with its observations discarded; this
+  works only when the scan runs in the main thread, which the CLI guarantees.
 
 ## License
 

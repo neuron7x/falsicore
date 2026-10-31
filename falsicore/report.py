@@ -30,8 +30,8 @@ REQUIRED = {"summary.json", "findings.json", "coverage_matrix.json", "command_au
 OPTIONAL = {"baseline_diff.json"}
 
 
-def host_ref() -> str:
-    raw, status = safe_read(Path("/etc/machine-id"), 4096)
+def host_ref(root: Path = Path("/")) -> str:
+    raw, status = safe_read(root / "etc/machine-id", 4096)
     if raw and raw.strip():
         return d.digest(raw.strip(), 32)
     return "UNAVAILABLE"
@@ -121,7 +121,7 @@ def report_data(audit) -> dict:
         "schema": SCHEMA,
         "tool_version": __version__, "created_utc": utc_now(),
         "scope": audit.scope, "profile": getattr(audit, "profile", "standard"),
-        "target_uid": getattr(audit, "uid", None), "host_ref": host_ref(),
+        "target_uid": getattr(audit, "uid", None), "host_ref": host_ref(getattr(audit, "root", Path("/"))),
         "outcome": verdict, "outcome_explanation_ua": OUTCOME_UA[verdict],
         "confirmed_compromise": False, "confirmed_attacker_attribution": False,
         "analysis_digest_sha256": _analysis_digest(findings, coverage, baseline),

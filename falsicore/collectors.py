@@ -174,7 +174,12 @@ def _parse_proc_stat(raw: bytes) -> tuple[int, int] | None:
 
 class Audit:
     def __init__(self, scope: str, target_user: str | None = None, incident_at: str | None = None,
-                 profile: str = "standard", max_seconds: int | None = None):
+                 profile: str = "standard", max_seconds: int | None = None, root: Path | str = "/"):
+        # Every system path is resolved under `root` (default "/": the live
+        # host). A fixture host or an offline-mounted image is scanned by
+        # pointing root elsewhere; /proc and probe commands remain live-only.
+        self.root = Path(root)
+        self.proc_root = self.root / "proc"
         if scope not in ("user", "system"):
             raise ValueError("scope must be user or system")
         if scope == "system" and os.geteuid() != 0:
@@ -217,7 +222,7 @@ class Audit:
         self.suspicious_exec_pids: set[int] = set()
         self.native_hosts_by_extension: dict[str, set[str]] = {}
         self._dpkg_index: dict[str, str] | None = None
-        boot, _ = safe_read(Path("/proc/sys/kernel/random/boot_id"), 64)
+        boot, _ = safe_read(self.proc_root / "sys/kernel/random/boot_id", 64)
         self.boot_id = boot.decode("ascii", "replace").strip() if boot else "UNAVAILABLE"
         self.incident_at = None
         if incident_at:
@@ -228,6 +233,17 @@ class Audit:
             if anchor.tzinfo is None:
                 raise ValueError("--incident-at must include timezone offset (e.g. +02:00)")
             self.incident_at = anchor.astimezone(dt.timezone.utc)
+
+    def sys(self, path: str) -> Path:
+        """Absolute system path resolved under the scan root."""
+        return self.root / path.lstrip("/")
+
+    def image_path(self, path: Path) -> str:
+        """Path as the inspected system itself names it (root prefix removed)."""
+        try:
+            return "/" + path.absolute().relative_to(self.root.absolute()).as_posix()
+        except ValueError:
+            return path.as_posix()
 
     def source(self, text: str | Path) -> str:
         """Public reports contain an opaque ID; path only in local private_index."""
@@ -468,13 +484,13 @@ class Audit:
         self.deadline = None
 
     def environment(self) -> None:
-        raw, status = safe_read(Path("/etc/os-release"), limit=16_384)
+        raw, status = safe_read(self.sys("/etc/os-release"), limit=16_384)
         os_release_source = "/etc/os-release"
         if raw is None:
             # /etc/os-release -> ../usr/lib/os-release is the normal systemd
             # arrangement on Ubuntu. Do NOT relax the general no-symlink read
             # policy; read the fixed vendor path independently instead.
-            fallback, fallback_status = safe_read(Path("/usr/lib/os-release"), limit=16_384)
+            fallback, fallback_status = safe_read(self.sys("/usr/lib/os-release"), limit=16_384)
             if fallback is not None:
                 raw, status = fallback, fallback_status
                 os_release_source = "/usr/lib/os-release"
@@ -502,12 +518,12 @@ class Audit:
                              {"mode_oct": oct(mode)}, kind="HARDENING")
         for f in ("/proc/sys/kernel/yama/ptrace_scope", "/proc/sys/kernel/unprivileged_bpf_disabled",
                   "/proc/sys/kernel/kptr_restrict", "/proc/sys/kernel/dmesg_restrict"):
-            value, _ = safe_read(Path(f), 64)
+            value, _ = safe_read(self.sys(f), 64)
             if value is not None:
                 self.stats[f"sysctl_{Path(f).name}"] = value.decode("ascii", "replace").strip()
         gaps = Gaps()
         if raw is None:
-            self.read_gap(Path(os_release_source), status, gaps)
+            self.read_gap(self.sys(os_release_source), status, gaps)
             if not gaps.incomplete:
                 gaps.add("READ_FAILED")
         self.command_gap(kernel, gaps)
@@ -583,7 +599,7 @@ class Audit:
                 "package_owner": "NOT_COLLECTED"}
 
     def processes(self) -> None:
-        root = getattr(self, "proc_root", Path("/proc"))
+        root = self.proc_root
         gaps = Gaps()
         total = 0
         denied = foreign = protected = disappeared = truncated_cmdlines = 0
@@ -890,7 +906,7 @@ class Audit:
             index: dict[str, str] = {}
             total = 0
             try:
-                lists = sorted(Path("/var/lib/dpkg/info").glob("*.md5sums"))
+                lists = sorted(self.sys("/var/lib/dpkg/info").glob("*.md5sums"))
             except OSError:
                 lists = []
             for md5file in lists[:20000]:
@@ -905,12 +921,12 @@ class Audit:
                     if len(digest) == 32 and rel:
                         index["/" + rel] = digest
             # Conffiles (/etc/...) are not in *.md5sums; dpkg records them in status.
-            raw, _ = safe_read(Path("/var/lib/dpkg/status"), 8 * 1024 * 1024)
+            raw, _ = safe_read(self.sys("/var/lib/dpkg/status"), 8 * 1024 * 1024)
             if raw is not None:
                 for m in re.finditer(r"^ (/\S+) ([0-9a-f]{32})(?: obsolete)?$", raw.decode("utf-8", "replace"), re.M):
                     index.setdefault(m.group(1), m.group(2))
             self._dpkg_index = index
-        return self._dpkg_index.get(path.as_posix())
+        return self._dpkg_index.get(self.image_path(path))
 
     def package_attested(self, path: Path, content: bytes) -> bool:
         """Root-owned, not group/world-writable, content equal to the dpkg record.
@@ -952,7 +968,7 @@ class Audit:
         return Path(target)
 
     def persistence(self) -> None:
-        units = [Path("/etc/systemd/system"), Path("/etc/systemd/user"),
+        units = [self.sys("/etc/systemd/system"), self.sys("/etc/systemd/user"),
                  self.home / ".config/systemd/user"]
         # Package-supplied units also participate in persistence, and can be
         # modified by privileged attackers. Do not mistake /etc-only for full
@@ -960,11 +976,11 @@ class Audit:
         # User-manager vendor units (/usr/lib/systemd/user) are where enabled
         # per-user services resolve to; without them those links are unseen.
         for kind in ("system", "user"):
-            vendor_units = Path("/usr/lib/systemd") / kind
+            vendor_units = self.sys("/usr/lib/systemd") / kind
             if vendor_units.is_dir() and not vendor_units.is_symlink():
                 units.append(vendor_units)
             else:
-                fallback = Path("/lib/systemd") / kind
+                fallback = self.sys("/lib/systemd") / kind
                 if fallback.is_dir() and not fallback.is_symlink():
                     units.append(fallback)
         gaps = Gaps()
@@ -1020,15 +1036,16 @@ class Audit:
                     temporal = self._mtime_near_incident(p)
                     self.finding("SUSPICIOUS_SYSTEMD_EXECUTION", "high", "Service may execute from volatile location or fetch a remote script", p,
                                  {"pattern_rules": rules, "mtime_near_incident_72h": temporal}, attack="T1543.002")
-        loader, loader_status = safe_read(Path("/etc/ld.so.preload"), 8192)
+        preload = self.sys("/etc/ld.so.preload")
+        loader, loader_status = safe_read(preload, 8192)
         if loader is None:
-            self.read_gap(Path("/etc/ld.so.preload"), loader_status, gaps)
+            self.read_gap(preload, loader_status, gaps)
         if loader:
-            self.finding("SYSTEM_LOADER_PRELOAD", "medium", "Dynamic loader system preload is configured; verify provenance", "/etc/ld.so.preload",
+            self.finding("SYSTEM_LOADER_PRELOAD", "medium", "Dynamic loader system preload is configured; verify provenance", preload,
                          {"entry_count": len([l for l in loader.splitlines() if l.strip()])}, kind="INDICATOR", attack="T1574.006")
         cronfiles, crontrunc = self._files(
-            [Path("/etc/cron.d"), Path("/etc/cron.daily"), Path("/etc/cron.hourly"), Path("/etc/cron.weekly"),
-             Path("/etc/cron.monthly"), self.home / ".config/cron"], recursive=False, limit=500, gaps=gaps,
+            [self.sys("/etc/cron.d"), self.sys("/etc/cron.daily"), self.sys("/etc/cron.hourly"), self.sys("/etc/cron.weekly"),
+             self.sys("/etc/cron.monthly"), self.home / ".config/cron"], recursive=False, limit=500, gaps=gaps,
             follow_root_links=True)
         for p in cronfiles:
             if self.over_budget():
@@ -1040,7 +1057,7 @@ class Audit:
                 self.read_gap(p, st, gaps)
                 continue
             self.baseline["cron_entry_hashes"].append(d.digest(str(p) + ":" + hashlib.sha256(raw).hexdigest()))
-            flags = self._command_text_review(cron_commands(raw.decode("utf-8", "replace"), system=p.parent == Path("/etc/cron.d")),
+            flags = self._command_text_review(cron_commands(raw.decode("utf-8", "replace"), system=p.parent == self.sys("/etc/cron.d")),
                                               p, raw, gaps)
             if flags:
                 self.finding("SUSPICIOUS_CRON_EXECUTION", "high", "Cron includes risky command pattern", p,
@@ -1113,7 +1130,7 @@ class Audit:
                     self.finding("SUSPICIOUS_SHELL_INIT", "medium", "Shell initialization contains literal risky command syntax; not proof of execution", p,
                                  {"patterns": rules, "file_name": p.name, "locations": analysis["matches"],
                                   "limitations": analysis["limitations"]}, attack="T1546.004")
-        autostart, a_trunc = self._files([self.home / ".config/autostart", Path("/etc/xdg/autostart")],
+        autostart, a_trunc = self._files([self.home / ".config/autostart", self.sys("/etc/xdg/autostart")],
                                          extensions={".desktop"}, limit=300, gaps=gaps)
         for p in autostart:
             raw, st = safe_read(p, 64 * 1024)
@@ -1127,7 +1144,7 @@ class Audit:
                                  {"patterns": rules}, attack="T1547.013")
         s_trunc = False
         if self.scope == "system":
-            sudoers, s_trunc = self._files([Path("/etc/sudoers.d")], limit=300, gaps=gaps)
+            sudoers, s_trunc = self._files([self.sys("/etc/sudoers.d")], limit=300, gaps=gaps)
             for p in sudoers:
                 raw, st = safe_read(p, 32 * 1024)
                 if raw is None:
@@ -1466,9 +1483,9 @@ class Audit:
             self.home / ".mozilla/native-messaging-hosts",
             self.home / "snap/firefox/common/.mozilla/native-messaging-hosts",
             self.home / ".var/app/org.mozilla.firefox/.mozilla/native-messaging-hosts",
-            Path("/etc/opt/chrome/native-messaging-hosts"),
-            Path("/etc/chromium/native-messaging-hosts"),
-            Path("/usr/lib/mozilla/native-messaging-hosts"),
+            self.sys("/etc/opt/chrome/native-messaging-hosts"),
+            self.sys("/etc/chromium/native-messaging-hosts"),
+            self.sys("/usr/lib/mozilla/native-messaging-hosts"),
         ]
         natives, _ = self._files(native_dirs, extensions={".json"}, limit=250, gaps=gaps, follow_root_links=True)
         home_prefix = self.home.as_posix().rstrip("/") + "/"
@@ -1555,9 +1572,9 @@ class Audit:
         for label, base in firefox_paths.items():
             count, trunc = self._scan_firefox(base, label, gaps)
             stats[label] = {"extensions": count, "profile_scan_limited": trunc}
-        policies = [Path("/etc/opt/chrome/policies/managed"), Path("/etc/chromium/policies/managed"),
-                    Path("/etc/brave/policies/managed"), Path("/etc/opt/edge/policies/managed"),
-                    Path("/etc/firefox/policies"), Path("/usr/lib/firefox/distribution")]
+        policies = [self.sys("/etc/opt/chrome/policies/managed"), self.sys("/etc/chromium/policies/managed"),
+                    self.sys("/etc/brave/policies/managed"), self.sys("/etc/opt/edge/policies/managed"),
+                    self.sys("/etc/firefox/policies"), self.sys("/usr/lib/firefox/distribution")]
         policy_files, _ = self._files(policies, extensions={".json"}, limit=200, gaps=gaps)
         for p in policy_files:
             raw, st = safe_read(p, d.MAX_JSON_BYTES)
@@ -1657,13 +1674,13 @@ class Audit:
                  "chrome-remote-desktop", "clamav", "auditd", "apparmor", "ufw", "firefox", "google-chrome-stable", "brave-browser")
         for name in names:
             # dpkg-query is not used: direct passive check of dpkg metadata only.
-            raw, st = safe_read(Path("/var/lib/dpkg/info") / f"{name}.list", 128*1024)
+            raw, st = safe_read(self.sys("/var/lib/dpkg/info") / f"{name}.list", 128*1024)
             if raw:
                 installed[name] = True
         self.stats["packages"] = {"selected_package_filelists_present": sorted(installed)}
         gaps = Gaps()
-        repos, _ = self._files([Path("/etc/apt/sources.list.d")], extensions={".list", ".sources"}, limit=150, gaps=gaps)
-        repos.append(Path("/etc/apt/sources.list"))
+        repos, _ = self._files([self.sys("/etc/apt/sources.list.d")], extensions={".list", ".sources"}, limit=150, gaps=gaps)
+        repos.append(self.sys("/etc/apt/sources.list"))
         insecure_repo_files = 0
         for p in repos:
             raw, st = safe_read(p, 128 * 1024)
@@ -1715,10 +1732,10 @@ class Audit:
         gaps = Gaps()
         for name, path in (("taint", "/proc/sys/kernel/tainted"), ("modules", "/proc/modules"),
                            ("lsm", "/sys/kernel/security/lsm")):
-            raw, st = safe_read(Path(path), 256*1024 if name == "modules" else 4096)
+            raw, st = safe_read(self.sys(path), 256*1024 if name == "modules" else 4096)
             if raw is None:
                 stats[name + "_status"] = st
-                self.read_gap(Path(path), st, gaps)
+                self.read_gap(self.sys(path), st, gaps)
                 continue
             if name == "modules":
                 stats["module_count"] = len(raw.splitlines())

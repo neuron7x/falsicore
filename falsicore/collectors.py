@@ -959,13 +959,14 @@ class Audit:
 
     def _resolve_sourced(self, target: str) -> Path | None:
         """Resolve a literal source/. operand: ~/, $HOME/ and ${HOME}/ forms only."""
-        home = self.home.as_posix().rstrip("/")
         for prefix in ("~/", "\x00VAR:HOME\x00/"):
             if target.startswith(prefix):
-                target = home + "/" + target[len(prefix):]
+                return self.home / target[len(prefix):]
         if "\x00" in target or not target.startswith("/"):
             return None
-        return Path(target)
+        # An absolute operand names a file of the inspected system: resolve it
+        # under the scan root (identical to the literal path on the live host).
+        return self.sys(target)
 
     def persistence(self) -> None:
         units = [self.sys("/etc/systemd/system"), self.sys("/etc/systemd/user"),
@@ -1488,7 +1489,8 @@ class Audit:
             self.sys("/usr/lib/mozilla/native-messaging-hosts"),
         ]
         natives, _ = self._files(native_dirs, extensions={".json"}, limit=250, gaps=gaps, follow_root_links=True)
-        home_prefix = self.home.as_posix().rstrip("/") + "/"
+        # Paths written inside manifests are the inspected system's own names.
+        home_prefix = self.image_path(self.home).rstrip("/") + "/"
         for path in natives:
             raw, st = safe_read(path, d.MAX_JSON_BYTES)
             if raw is None:
@@ -1521,8 +1523,8 @@ class Audit:
                              {"host_path_id": d.digest(host_path), "host_name": host_name,
                               "manifest_owner": NATIVE_HOST_OWNERS.get(path.parent.parent.name, path.parent.parent.name[:40]),
                               "allowed_extensions": sorted(set(allowed))[:40],
-                              "manifest_location": "user" if path.as_posix().startswith(home_prefix) else "system",
-                              "executable": self._file_identity(Path(host_path)),
+                              "manifest_location": "user" if self.image_path(path).startswith(home_prefix) else "system",
+                              "executable": self._file_identity(self.sys(host_path)),
                               "host_path_ref": self.source(host_path)},
                              kind="EXPOSURE", attack="T1176.001")
         return len(natives)

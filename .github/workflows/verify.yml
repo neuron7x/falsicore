@@ -42,6 +42,8 @@ jobs:
         run: python tools/code_audit.py . --fail-on high
       - name: Synthetic rule fixtures
         run: python -m tools.evaluate_rules
+      - name: Detection validity (planted artifacts vs benign twins; committed table current)
+        run: python tools/validity.py --check
       - name: Reproducible builds and packaged self-test
         if: matrix.python-version == '3.13'
         shell: bash

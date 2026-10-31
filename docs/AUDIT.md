@@ -92,6 +92,29 @@ and `.desktop` adapters split on `str.splitlines()`, which also breaks on
 No evasion follows (both halves are still analysed), so the single-line model
 excludes those characters instead of changing the adapters.
 
+## Detection validity (0.1.4)
+
+`tools/validity.py` builds a hermetic fixture host per scenario (own root,
+home and `/proc`; probe commands answered from canned text through the same
+read-only policy), plants one artifact shape, runs a full deep scan and
+records whether the targeted rule fired. Each shape has a benign twin that
+must stay silent. The unplanted host reaches `NO_COMPROMISE_INDICATORS_OBSERVED`
+in both scopes, so a silent twin is a measurement and not an artefact of an
+inconclusive baseline. The table lives in `docs/DETECTION_VALIDITY.json`; CI
+fails when it is stale (`--check`). This measures recall on synthetic
+artifact shapes and false alarms on their twins: it says nothing about real
+malware, about shapes not listed, or about the live host.
+
+The first run refuted two scenarios; both are kept as negative results:
+
+| ID | Scenario | Cause | Disposition |
+|---|---|---|---|
+| V-1 | `volatile_process_with_public_connection` | The fixture used RFC 5737 documentation addresses (198.51.100.x), which `ipaddress` classifies as private, so `TEMP_PROCESS_PUBLIC_EGRESS` could never fire. | fixture defect: scenarios use globally routable addresses (never contacted) |
+| V-2 | `native_host_in_home` | Under an injected root the collector compared the manifest's path (`/home/u/...`, the inspected system's own name) with the host-prefixed home. The same mismatch applies to `source /etc/...` operands. | product defect for root injection: manifest paths and absolute `source` operands are resolved as image paths (`image_path`, `sys`); live-host behaviour unchanged |
+
+Known gaps are listed as such and never counted: a relative program after
+`cd`, a download bound to a variable before `eval`.
+
 ## Fault injection (targeted mutation)
 
 The script `.falsicore-audit/mutation.py` (private, not shipped) copies the

@@ -14,6 +14,7 @@
 | Distribution is complete | source allowlist + exact manifest verification | no unexpected files and complete hashes |
 | Collected report is internally coherent | SHA-256 manifest and semantic recomputation of outcome/counts/gaps/reason codes/baseline | verifier PASS, malicious rehash/inconsistency/baseline-edit regressions PASS |
 | Tests guard the protections they claim to | targeted fault injection on an isolated copy | every mutant killed (docs/AUDIT.md) |
+| Rules detect the artifact shapes they target and spare benign twins | hermetic fixture host, one planted shape per scenario, full scan (`tools/validity.py`) | every positive detected, every twin silent, unplanted host `NO_COMPROMISE_INDICATORS_OBSERVED`, committed table current |
 | Endpoint is not compromised | representative labeled corpus, host event coverage, independent forensic analysis | **NOT ESTABLISHED** |
 
 ## Safety invariants

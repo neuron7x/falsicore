@@ -1,0 +1,1166 @@
+{
+  "clean_host": [
+    {
+      "coverage": {
+        "auth": "COMPLETED",
+        "browsers": "COMPLETED",
+        "environment": "COMPLETED",
+        "kernel": "COMPLETED",
+        "network": "COMPLETED",
+        "packages": "COMPLETED",
+        "persistence": "COMPLETED",
+        "processes": "COMPLETED"
+      },
+      "findings": [],
+      "incomplete_essential": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "passes": true,
+      "scope": "user"
+    },
+    {
+      "coverage": {
+        "auth": "COMPLETED",
+        "browsers": "COMPLETED",
+        "environment": "COMPLETED",
+        "kernel": "COMPLETED",
+        "network": "COMPLETED",
+        "packages": "COMPLETED",
+        "persistence": "COMPLETED",
+        "processes": "COMPLETED"
+      },
+      "findings": [],
+      "incomplete_essential": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "passes": true,
+      "scope": "system"
+    }
+  ],
+  "does_not_measure": "sensitivity to real malware; shapes not listed; the live host",
+  "false_alarms": [],
+  "measures": "recall on synthetic artifact shapes; false alarms on benign twins; unplanted-host verdict",
+  "method": "hermetic fixture host (own root, home, /proc; canned probe output); one planted artifact shape per scenario; full scan; deep profile",
+  "missed_positives": [],
+  "passes": true,
+  "per_rule": {
+    "BROWSER_ENTERPRISE_POLICY": {
+      "benign_twins": 1,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "DELETED_RUNNING_EXECUTABLE": {
+      "benign_twins": 0,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "DPKG_CONFFILE_CHANGED": {
+      "benign_twins": 1,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "DPKG_FILES_MISSING": {
+      "benign_twins": 1,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "DPKG_FILE_DRIFT": {
+      "benign_twins": 1,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "EXECUTABLE_IN_VOLATILE_PATH": {
+      "benign_twins": 1,
+      "detected": 3,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 3
+    },
+    "INSECURE_APT_REPOSITORY_SETTING": {
+      "benign_twins": 1,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "INVALID_EXTENSION_MANIFEST": {
+      "benign_twins": 0,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "NATIVE_HOST_OUTSIDE_STANDARD_PATH": {
+      "benign_twins": 1,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "POWERFUL_BROWSER_EXTENSION": {
+      "benign_twins": 1,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "POWERFUL_FIREFOX_EXTENSION": {
+      "benign_twins": 0,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "REMOTE_ACCESS_PORT_EXPOSED": {
+      "benign_twins": 1,
+      "detected": 2,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 2
+    },
+    "REMOTE_AUTHENTICATION_REVIEW": {
+      "benign_twins": 1,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "ROOT_RUNNING_USER_PATH": {
+      "benign_twins": 1,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "SSH_AUTHORIZED_KEYS_PERMISSIONS": {
+      "benign_twins": 0,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "SSH_DIRECTORY_OVERPERMISSIVE": {
+      "benign_twins": 0,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "SUDO_NOPASSWD_RULE": {
+      "benign_twins": 1,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "SUSPICIOUS_AUTOSTART": {
+      "benign_twins": 1,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "SUSPICIOUS_CRON_EXECUTION": {
+      "benign_twins": 1,
+      "detected": 2,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 2
+    },
+    "SUSPICIOUS_SHELL_INIT": {
+      "benign_twins": 2,
+      "detected": 7,
+      "false_alarms": 0,
+      "known_gaps": 2,
+      "positives": 7
+    },
+    "SUSPICIOUS_SYSTEMD_EXECUTION": {
+      "benign_twins": 1,
+      "detected": 3,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 3
+    },
+    "SUSPICIOUS_USER_CRONTAB": {
+      "benign_twins": 1,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "SYSTEMD_SYMLINK_TO_TEMP": {
+      "benign_twins": 0,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "SYSTEM_LOADER_PRELOAD": {
+      "benign_twins": 0,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "TEMP_PROCESS_PUBLIC_EGRESS": {
+      "benign_twins": 1,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "UNSAFE_BROWSER_LAUNCH_FLAG": {
+      "benign_twins": 1,
+      "detected": 2,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 2
+    }
+  },
+  "rules_without_positive_scenario": [],
+  "scenario_counts": {
+    "benign": 18,
+    "known_gap": 2,
+    "positive": 38
+  },
+  "scenarios": [
+    {
+      "attack": "T1036",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "process_from_tmp",
+      "notes": "",
+      "observed": [
+        "EXECUTABLE_IN_VOLATILE_PATH"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "EXECUTABLE_IN_VOLATILE_PATH"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1036",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "process_from_tmp_hidden_dir_shm",
+      "notes": "",
+      "observed": [
+        "EXECUTABLE_IN_VOLATILE_PATH"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "EXECUTABLE_IN_VOLATILE_PATH"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "process_from_usr_bin",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "EXECUTABLE_IN_VOLATILE_PATH"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1070.004",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "deleted_running_executable",
+      "notes": "",
+      "observed": [
+        "DELETED_RUNNING_EXECUTABLE"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "DELETED_RUNNING_EXECUTABLE"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1548",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "root_process_from_home",
+      "notes": "user scope cannot read a root process's exe on a live host; the shape is verified on the fixture",
+      "observed": [
+        "ROOT_RUNNING_USER_PATH"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "ROOT_RUNNING_USER_PATH"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "root_process_from_usr",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "ROOT_RUNNING_USER_PATH"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1185",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "browser_remote_debugging_port_open",
+      "notes": "",
+      "observed": [
+        "UNSAFE_BROWSER_LAUNCH_FLAG"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "UNSAFE_BROWSER_LAUNCH_FLAG"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1562",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "browser_no_sandbox",
+      "notes": "",
+      "observed": [
+        "UNSAFE_BROWSER_LAUNCH_FLAG"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "UNSAFE_BROWSER_LAUNCH_FLAG"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "browser_ordinary_flags",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "UNSAFE_BROWSER_LAUNCH_FLAG"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1021",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "ssh_listening_everywhere",
+      "notes": "",
+      "observed": [
+        "REMOTE_ACCESS_PORT_EXPOSED"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "REMOTE_ACCESS_PORT_EXPOSED"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1021.005",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "vnc_listening_on_lan_address",
+      "notes": "",
+      "observed": [
+        "REMOTE_ACCESS_PORT_EXPOSED"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "REMOTE_ACCESS_PORT_EXPOSED"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "ssh_listening_loopback_only",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "REMOTE_ACCESS_PORT_EXPOSED"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1071",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "volatile_process_with_public_connection",
+      "notes": "",
+      "observed": [
+        "EXECUTABLE_IN_VOLATILE_PATH",
+        "TEMP_PROCESS_PUBLIC_EGRESS"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "EXECUTABLE_IN_VOLATILE_PATH",
+        "TEMP_PROCESS_PUBLIC_EGRESS"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "ordinary_process_with_public_connection",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "TEMP_PROCESS_PUBLIC_EGRESS"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1543.002",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "unit_symlink_into_shm",
+      "notes": "",
+      "observed": [
+        "SYSTEMD_SYMLINK_TO_TEMP"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SYSTEMD_SYMLINK_TO_TEMP"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1543.002",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "unit_execstart_download_pipe",
+      "notes": "",
+      "observed": [
+        "SUSPICIOUS_SYSTEMD_EXECUTION"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SUSPICIOUS_SYSTEMD_EXECUTION"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1543.002",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "unit_execstart_from_tmp",
+      "notes": "",
+      "observed": [
+        "SUSPICIOUS_SYSTEMD_EXECUTION"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SUSPICIOUS_SYSTEMD_EXECUTION"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1543.002",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "user_unit_execstart_from_tmp",
+      "notes": "",
+      "observed": [
+        "SUSPICIOUS_SYSTEMD_EXECUTION"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SUSPICIOUS_SYSTEMD_EXECUTION"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "unit_with_tmp_as_argument",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "SUSPICIOUS_SYSTEMD_EXECUTION"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1574.006",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "ld_so_preload_present",
+      "notes": "",
+      "observed": [
+        "SYSTEM_LOADER_PRELOAD"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SYSTEM_LOADER_PRELOAD"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1053.003",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "cron_d_executes_from_tmp",
+      "notes": "",
+      "observed": [
+        "SUSPICIOUS_CRON_EXECUTION"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SUSPICIOUS_CRON_EXECUTION"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1053.003",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "cron_hourly_download_pipe",
+      "notes": "",
+      "observed": [
+        "SUSPICIOUS_CRON_EXECUTION"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SUSPICIOUS_CRON_EXECUTION"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "cron_d_ordinary_job",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "SUSPICIOUS_CRON_EXECUTION"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1053.003",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "user_crontab_reboot_from_shm",
+      "notes": "",
+      "observed": [
+        "SUSPICIOUS_USER_CRONTAB"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SUSPICIOUS_USER_CRONTAB"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "user_crontab_ordinary",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "SUSPICIOUS_USER_CRONTAB"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1546.004",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "bashrc_download_pipe",
+      "notes": "",
+      "observed": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1546.004",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "bashrc_eval_of_download",
+      "notes": "",
+      "observed": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1546.004",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "bashrc_prompt_command_download",
+      "notes": "",
+      "observed": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1059.004",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "bashrc_reverse_shell_dev_tcp",
+      "notes": "",
+      "observed": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1546.004",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "bashrc_sources_file_that_executes_from_tmp",
+      "notes": "",
+      "observed": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1027",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "bashrc_base64_decode_into_shell",
+      "notes": "",
+      "observed": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1546.004",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "zshrc_trap_download",
+      "notes": "",
+      "observed": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "bashrc_stock_ubuntu_wrappers",
+      "notes": "",
+      "observed": [],
+      "outcome": "INCONCLUSIVE_DUE_TO_VISIBILITY_LIMITATIONS",
+      "rules": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "bashrc_download_only_in_comment",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "",
+      "detected": false,
+      "kind": "known_gap",
+      "name": "bashrc_relative_exec_after_cd",
+      "notes": "relative program after cd: no dataflow between commands",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "detected": false,
+      "kind": "known_gap",
+      "name": "bashrc_download_via_variable",
+      "notes": "download bound to a variable first; reported as EXPANSION_NOT_RESOLVED only",
+      "observed": [],
+      "outcome": "INCONCLUSIVE_DUE_TO_VISIBILITY_LIMITATIONS",
+      "rules": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1547.013",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "autostart_exec_from_tmp",
+      "notes": "",
+      "observed": [
+        "SUSPICIOUS_AUTOSTART"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SUSPICIOUS_AUTOSTART"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "autostart_ordinary",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "SUSPICIOUS_AUTOSTART"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1098.004",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "authorized_keys_world_readable",
+      "notes": "",
+      "observed": [
+        "SSH_AUTHORIZED_KEYS_PERMISSIONS"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "SSH_AUTHORIZED_KEYS_PERMISSIONS"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1098.004",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "ssh_directory_group_accessible",
+      "notes": "",
+      "observed": [
+        "SSH_DIRECTORY_OVERPERMISSIVE"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "SSH_DIRECTORY_OVERPERMISSIVE"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1548.003",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "sudoers_nopasswd",
+      "notes": "",
+      "observed": [
+        "SUDO_NOPASSWD_RULE"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "SUDO_NOPASSWD_RULE"
+      ],
+      "scope": "system"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "sudoers_with_password",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "SUDO_NOPASSWD_RULE"
+      ],
+      "scope": "system",
+      "silent": true
+    },
+    {
+      "attack": "T1176.001",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "chrome_extension_powerful",
+      "notes": "",
+      "observed": [
+        "POWERFUL_BROWSER_EXTENSION"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "POWERFUL_BROWSER_EXTENSION"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "chrome_extension_powerful_but_disabled",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "POWERFUL_BROWSER_EXTENSION"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1176.001",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "chrome_extension_corrupt_manifest",
+      "notes": "",
+      "observed": [
+        "INVALID_EXTENSION_MANIFEST"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "INVALID_EXTENSION_MANIFEST"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1176.001",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "firefox_addon_powerful_active",
+      "notes": "",
+      "observed": [
+        "POWERFUL_FIREFOX_EXTENSION"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "POWERFUL_FIREFOX_EXTENSION"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1176.001",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "native_host_in_home",
+      "notes": "",
+      "observed": [
+        "NATIVE_HOST_OUTSIDE_STANDARD_PATH"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "NATIVE_HOST_OUTSIDE_STANDARD_PATH"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "native_host_in_usr_lib",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "NATIVE_HOST_OUTSIDE_STANDARD_PATH"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1176.001",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "browser_force_install_policy",
+      "notes": "",
+      "observed": [
+        "BROWSER_ENTERPRISE_POLICY"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "BROWSER_ENTERPRISE_POLICY"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "browser_policy_without_extensions",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "BROWSER_ENTERPRISE_POLICY"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1078",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "ssh_login_accepted",
+      "notes": "",
+      "observed": [
+        "REMOTE_AUTHENTICATION_REVIEW"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "REMOTE_AUTHENTICATION_REVIEW"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "ssh_login_failed_only",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "REMOTE_AUTHENTICATION_REVIEW"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1195",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "apt_source_trusted_yes",
+      "notes": "",
+      "observed": [
+        "INSECURE_APT_REPOSITORY_SETTING"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "INSECURE_APT_REPOSITORY_SETTING"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "apt_source_signed_by",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "INSECURE_APT_REPOSITORY_SETTING"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1554",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "dpkg_binary_drift",
+      "notes": "",
+      "observed": [
+        "DPKG_FILE_DRIFT"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "DPKG_FILE_DRIFT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "dpkg_conffile_changed",
+      "notes": "",
+      "observed": [
+        "DPKG_CONFFILE_CHANGED"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "DPKG_CONFFILE_CHANGED"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "dpkg_files_missing",
+      "notes": "",
+      "observed": [
+        "DPKG_FILES_MISSING"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "DPKG_FILES_MISSING"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "dpkg_unreadable_is_not_drift",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "DPKG_CONFFILE_CHANGED",
+        "DPKG_FILES_MISSING",
+        "DPKG_FILE_DRIFT"
+      ],
+      "scope": "user",
+      "silent": true
+    }
+  ],
+  "schema": "falsicore.detection-validity.v1",
+  "tool_version": "0.1.3"
+}

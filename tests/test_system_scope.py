@@ -42,14 +42,14 @@ class SystemScopeTests(unittest.TestCase):
         self.a.command=lambda tool,args,**kw:self.response("COMPLETED")
         self.a.packages()
         self.assertEqual(self.a.coverage[-1]["status"],"COMPLETED")
-        self.assertEqual(self.a.stats["package_integrity"]["content_changed_other_files"],0)
+        self.assertEqual(self.a.stats["package_integrity"]["dpkg"]["content_changed_other_files"],0)
 
     def test_system_package_verify_modified(self):
         self.a._files=lambda *args,**k:([],False)
         self.a.command=lambda tool,args,**kw:self.response("FAILED","??5??????  /usr/bin/sample\n",1)
         self.a.packages()
-        self.assertIn("DPKG_FILE_DRIFT", {f["rule"] for f in self.a.findings})
-        self.assertEqual(self.a.stats["package_integrity"]["content_changed_other_files"],1)
+        self.assertIn("PACKAGE_FILE_DRIFT", {f["rule"] for f in self.a.findings})
+        self.assertEqual(self.a.stats["package_integrity"]["dpkg"]["content_changed_other_files"],1)
         # A changed package binary warrants review, never a confirmed compromise.
         self.assertEqual(self.a.findings[0]["kind"],"INDICATOR")
         self.assertEqual(self.a.findings[0]["confirmation"],"NOT_ESTABLISHED")

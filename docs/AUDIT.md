@@ -115,6 +115,20 @@ The first run refuted two scenarios; both are kept as negative results:
 Known gaps are listed as such and never counted: a relative program after
 `cd`, a download bound to a variable before `eval`.
 
+The harness paid for itself again when the package collector was generalised
+(0.1.4, `falsicore/packages.py`):
+
+| ID | Scenario | Cause | Disposition |
+|---|---|---|---|
+| V-3 | every pacman and apk scenario | `safe_read` refuses a bound above 8 MiB; the new verification passed 64 MiB (files) and 128 MiB (apk database), so the whole `packages` collector raised and was rolled back to `FAILED/COLLECTOR_ERROR` — on every Arch and Alpine host. | bounds set to `safe_read`'s ceiling; larger files count as unverifiable; the scenarios now pass |
+
+Rule renames in 0.1.4 (one rule per observation, the manager is evidence):
+`DPKG_FILE_DRIFT` → `PACKAGE_FILE_DRIFT`, `DPKG_CONFFILE_CHANGED` →
+`PACKAGE_CONFFILE_CHANGED`, `DPKG_FILES_MISSING` → `PACKAGE_FILES_MISSING`,
+`INSECURE_APT_REPOSITORY_SETTING` → `INSECURE_PACKAGE_SOURCE_SETTING`; new
+`PACKAGE_METADATA_DRIFT`. `rule_set_version` follows the tool version, so
+baselines across the rename are refused, never compared.
+
 ## Fault injection (targeted mutation)
 
 The script `.falsicore-audit/mutation.py` (private, not shipped) copies the

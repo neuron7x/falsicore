@@ -1,9 +1,12 @@
 """Bounded passive collectors for Linux. No socket connections or command execution of artifacts."""
 from __future__ import annotations
 
+import base64
 import copy
 import datetime as dt
+import gzip
 import hashlib
+import io
 import json
 import os
 import pwd
@@ -13,10 +16,12 @@ import stat
 import threading
 import time
 from collections import Counter
+from zlib import error as zlib_error
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from . import detectors as d
+from . import packages as pk
 from .shell_syntax import analyze as analyze_shell
 from .config_commands import cron_commands, desktop_commands
 from .safety import run_command, safe_read, utc_now
@@ -38,7 +43,7 @@ def _allowed_audit_invocation(name: str, args: list[str]) -> bool:
     """
     exact = {
         "uname": ["-r"], "ss": ["-H", "-tuna", "-p"],
-        "dpkg": ["--verify"], "aa-status": ["--enabled"],
+        "dpkg": ["--verify"], "rpm": ["-Va"], "aa-status": ["--enabled"],
         "mokutil": ["--sb-state"],
     }
     if name in exact:
@@ -106,6 +111,21 @@ class Gaps:
 MAX_FILES_PER_COLLECTION = 2000
 MAX_PROCESSES = 6000
 MAX_FINDINGS = 350
+
+# Package self-verification (pacman, apk: no verify command is run; the
+# recorded digests are compared with the files on disk). Bounded to the parts
+# of the tree where tampering changes what runs; libraries and data are not
+# hashed within the scan budget. Conffile semantics: anything under /etc.
+VERIFY_PREFIXES = ("/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/", "/usr/libexec/", "/usr/lib/systemd/",
+                   "/lib/systemd/", "/etc/", "/usr/lib/sysctl.d/", "/usr/lib/tmpfiles.d/")
+VERIFY_MAX_FILES = 20000
+VERIFY_MAX_BYTES = 512 * 1024 * 1024
+VERIFY_MAX_FILE_BYTES = 8 * 1024 * 1024   # safe_read's own ceiling; larger files count as unverifiable
+PACKAGE_DB_MAX_RECORDS = 20000
+PACKAGE_DB_MAX_BYTES = 128 * 1024 * 1024
+MTREE_MAX_COMPRESSED = 8 * 1024 * 1024
+MTREE_MAX_DECOMPRESSED = 32 * 1024 * 1024
+APK_DB_MAX_BYTES = 8 * 1024 * 1024   # safe_read's ceiling; a larger installed db is not parsed
 
 # Hard whole-scan deadline (A-8). The cooperative budget turns an overrun into
 # PARTIAL and keeps the observations; the hard deadline fires only after a
@@ -222,6 +242,8 @@ class Audit:
         self.suspicious_exec_pids: set[int] = set()
         self.native_hosts_by_extension: dict[str, set[str]] = {}
         self._dpkg_index: dict[str, str] | None = None
+        self._pacman_index: dict[str, tuple[str, str]] | None = None
+        self._apk_index: dict[str, tuple[str, str]] | None = None
         boot, _ = safe_read(self.proc_root / "sys/kernel/random/boot_id", 64)
         self.boot_id = boot.decode("ascii", "replace").strip() if boot else "UNAVAILABLE"
         self.incident_at = None
@@ -928,12 +950,98 @@ class Audit:
             self._dpkg_index = index
         return self._dpkg_index.get(self.image_path(path))
 
-    def package_attested(self, path: Path, content: bytes) -> bool:
-        """Root-owned, not group/world-writable, content equal to the dpkg record.
+    def _read_mtree(self, path: Path) -> bytes | None:
+        """Decompress one pacman mtree with bounds on both sides of gzip."""
+        raw, _ = safe_read(path, MTREE_MAX_COMPRESSED)
+        if raw is None:
+            return None
+        try:
+            with gzip.GzipFile(fileobj=io.BytesIO(raw)) as handle:
+                data = handle.read(MTREE_MAX_DECOMPRESSED + 1)
+        except (OSError, EOFError, zlib_error):
+            return None
+        return None if len(data) > MTREE_MAX_DECOMPRESSED else data
 
-        md5 detects accidental or unprivileged tampering only; an adversary with
+    def _pacman_records(self) -> dict[str, tuple[str, str]]:
+        """path -> (algorithm, digest) from every local package's mtree (lazy, bounded)."""
+        if self._pacman_index is None:
+            index: dict[str, tuple[str, str]] = {}
+            local = self.sys("/var/lib/pacman/local")
+            try:
+                folders = sorted(p for p in local.iterdir() if p.is_dir() and not p.is_symlink())
+            except OSError:
+                folders = []
+            total = 0
+            for folder in folders[:PACKAGE_DB_MAX_RECORDS]:
+                data = self._read_mtree(folder / "mtree")
+                if data is None:
+                    continue
+                total += len(data)
+                if total > PACKAGE_DB_MAX_BYTES:
+                    break
+                entries, _ = pk.parse_pacman_mtree(data)
+                for rel, attrs in entries.items():
+                    if attrs.get("type") == "file" and rel not in pk.PACMAN_METADATA_ENTRIES:
+                        if "sha256" in attrs:
+                            index[rel] = ("sha256", attrs["sha256"])
+                        elif "md5" in attrs:
+                            index[rel] = ("md5", attrs["md5"])
+            self._pacman_index = index
+        return self._pacman_index
+
+    def _apk_records(self) -> dict[str, tuple[str, str]]:
+        """path -> (algorithm, base64 digest) from apk's installed database (lazy, bounded)."""
+        if self._apk_index is None:
+            index: dict[str, tuple[str, str]] = {}
+            raw, _ = safe_read(self.sys("/lib/apk/db/installed"), APK_DB_MAX_BYTES)
+            if raw is not None:
+                db, _ = pk.parse_apk_installed(raw)
+                for rel, info in db["files"].items():
+                    if "sha256_b64" in info:
+                        index[rel] = ("sha256", info["sha256_b64"])
+                    elif "sha1_b64" in info:
+                        index[rel] = ("sha1", info["sha1_b64"])
+            self._apk_index = index
+        return self._apk_index
+
+    def _recorded_digest(self, path: Path) -> tuple[str, str] | None:
+        """(algorithm, digest) the package database records for `path`, or None.
+
+        dpkg records md5 (hex), pacman sha256 or md5 (hex), apk sha1 or sha256
+        (base64). rpm keeps its records in a binary database that is not
+        parsed here: rpm hosts verify through `rpm -Va` only.
+        """
+        managers = self.managers()
+        if "dpkg" in managers:
+            md5 = self._dpkg_md5(path)
+            if md5 is not None:
+                return ("md5", md5)
+        image = self.image_path(path)
+        if "pacman" in managers and image in self._pacman_records():
+            return self._pacman_records()[image]
+        if "apk" in managers and image in self._apk_records():
+            return self._apk_records()[image]
+        return None
+
+    @staticmethod
+    def _digest_matches(content: bytes, algorithm: str, expected: str) -> bool:
+        digest = hashlib.new(algorithm, content, usedforsecurity=False)
+        if "=" in expected or len(expected) not in (32, 40, 64):
+            return base64.b64encode(digest.digest()).decode("ascii") == expected
+        return digest.hexdigest() == expected.lower()
+
+    def managers(self) -> list[str]:
+        if not hasattr(self, "_managers"):
+            self._managers = pk.detect_managers(self.root)
+        return self._managers
+
+    def package_attested(self, path: Path, content: bytes) -> bool:
+        """Root-owned, not group/world-writable, content equal to the package record.
+
+        A recorded digest (dpkg md5, pacman sha256/md5, apk sha1/sha256)
+        detects accidental or unprivileged tampering only; an adversary with
         root can rewrite both file and record. Callers state this as a trust
-        assumption, never as verification of safety.
+        assumption, never as verification of safety. rpm hosts: never attested.
         """
         try:
             for part in (path, *path.parents):
@@ -942,8 +1050,8 @@ class Audit:
                     return False
         except OSError:
             return False
-        expected = self._dpkg_md5(path)
-        return expected is not None and hashlib.md5(content, usedforsecurity=False).hexdigest() == expected
+        recorded = self._recorded_digest(path)
+        return recorded is not None and self._digest_matches(content, *recorded)
 
     def _command_text_review(self, text: str, path: Path, content: bytes, gaps: Gaps) -> list[str]:
         """Static shell analysis of scheduler/autostart command text with explicit limits."""
@@ -1670,62 +1778,207 @@ class Audit:
         self.conclude("auth", "auth/authpriv journald entries within 30 days; no raw messages retained; absence of logging is not absence of incident",
                       gaps, lines)
 
+    # (manager, directory or file under the root, extensions or None for every file)
+    REPO_CONFIG: tuple[tuple[str, str, frozenset[str] | None], ...] = (
+        ("apt", "/etc/apt/sources.list", None), ("apt", "/etc/apt/sources.list.d", frozenset({".list", ".sources"})),
+        ("apt", "/etc/apt/apt.conf", None), ("apt", "/etc/apt/apt.conf.d", None),
+        ("dnf", "/etc/yum.repos.d", frozenset({".repo"})), ("dnf", "/etc/dnf/dnf.conf", None), ("dnf", "/etc/yum.conf", None),
+        ("pacman", "/etc/pacman.conf", None), ("pacman", "/etc/pacman.d", frozenset({".conf"})),
+        ("apk", "/etc/apk/repositories", None),
+    )
+
+    def _repo_config_files(self, gaps: Gaps) -> list[tuple[str, Path]]:
+        """Repository configuration files of every manager, each path once."""
+        found: list[tuple[str, Path]] = []
+        seen: set[Path] = set()
+        for manager, location, extensions in self.REPO_CONFIG:
+            path = self.sys(location)
+            if path.is_dir() and not path.is_symlink():
+                files, _ = self._files([path], extensions=set(extensions) if extensions else None, limit=150, gaps=gaps,
+                                       follow_root_links=True)
+            elif path.is_file() or path.is_symlink():
+                files = [path]
+            else:
+                continue
+            for f in files:
+                if f not in seen:
+                    seen.add(f)
+                    found.append((manager, f))
+        return found
+
+    def _integrity_findings(self, manager: str, review: dict, source: str, gaps: Gaps) -> None:
+        """One set of rules for every manager; the manager is evidence, not identity."""
+        changed_other = review.get("content_changed_other_files", 0)
+        conffiles = review.get("content_changed_conffiles", 0)
+        if changed_other:
+            self.finding("PACKAGE_FILE_DRIFT", "medium",
+                         "Installed non-configuration files differ from the package database records", source,
+                         {"manager": manager, "content_changed_other_files": changed_other,
+                          "content_changed_conffiles": conffiles}, attack="T1554")
+        elif conffiles:
+            self.finding("PACKAGE_CONFFILE_CHANGED", "low", "Configuration files differ from their packaged versions",
+                         source, {"manager": manager, "content_changed_conffiles": conffiles}, kind="CONTEXT")
+        if review.get("missing_files"):
+            self.finding("PACKAGE_FILES_MISSING", "low", "Files recorded by installed packages are absent on disk",
+                         source, {"manager": manager, "missing_files": review["missing_files"],
+                                  "missing_by_prefix": review.get("missing_by_prefix", {})}, kind="CONTEXT")
+        if review.get("metadata_changed_only"):
+            self.finding("PACKAGE_METADATA_DRIFT", "low",
+                         "Mode, owner, size or link target of packaged files differ from the records while content matches",
+                         source, {"manager": manager, "metadata_changed_only": review["metadata_changed_only"]}, kind="CONTEXT")
+        if review.get("unverifiable"):
+            gaps.add("REQUIRES_SYSTEM_SCOPE" if self.scope == "user" else "PERMISSION_DENIED", review["unverifiable"])
+
+    def _verify_with_command(self, manager: str, tool: str, args: list[str], classify: Callable[[str], dict],
+                             gaps: Gaps) -> dict | None:
+        verify = self.command(tool, args, timeout=110, limit=4 * 1024 * 1024)
+        # Both tools exit non-zero when they report differences; output is the result.
+        if verify["status"] in ("COMPLETED", "PARTIAL") or (verify["exit"] in (1, 2) and bool(verify["stdout"])):
+            review = classify(verify["stdout"])
+            review.update({"unverified_after_cap": verify["truncated"], "command_exit": verify["exit"]})
+        else:
+            self.command_gap(verify, gaps)
+            review = None
+            self.stats.setdefault("package_integrity", {})[manager] = {"status": verify["status"], "error": verify["error"]}
+        if verify["truncated"]:
+            gaps.add("INPUT_TRUNCATED")
+        return review
+
+    def _verify_recorded(self, manager: str, records: dict[str, tuple[str, str]], modes: dict[str, int], gaps: Gaps) -> dict:
+        """Compare recorded digests with the files on disk, within VERIFY_* bounds."""
+        review: dict[str, Any] = {"content_changed_conffiles": 0, "content_changed_other_files": 0, "missing_files": 0,
+                                  "unverifiable": 0, "metadata_changed_only": 0, "unparsed_lines": 0,
+                                  "files_checked": 0, "bytes_hashed": 0, "records": len(records), "truncated": False}
+        prefixes: dict[str, int] = {}
+        selected = sorted(rel for rel in records if rel.startswith(VERIFY_PREFIXES))
+        review["records_in_scope"] = len(selected)
+        for rel in selected:
+            if self.over_budget():
+                gaps.add("BUDGET_EXHAUSTED")
+                review["truncated"] = True
+                break
+            if review["files_checked"] >= VERIFY_MAX_FILES or review["bytes_hashed"] >= VERIFY_MAX_BYTES:
+                gaps.add("ENUMERATION_LIMIT")
+                review["truncated"] = True
+                break
+            algorithm, expected = records[rel]
+            path = self.sys(rel)
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                review["missing_files"] += 1
+                prefix = "/" + "/".join(rel.strip("/").split("/")[:3])
+                prefixes[prefix] = prefixes.get(prefix, 0) + 1
+                continue
+            except OSError:
+                review["unverifiable"] += 1
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                review["metadata_changed_only"] += 1  # recorded as a file, found as something else
+                continue
+            content, status = safe_read(path, VERIFY_MAX_FILE_BYTES)
+            review["files_checked"] += 1
+            if content is None:
+                review["unverifiable"] += 1
+                continue
+            review["bytes_hashed"] += len(content)
+            if not self._digest_matches(content, algorithm, expected):
+                review["content_changed_conffiles" if rel.startswith("/etc/") else "content_changed_other_files"] += 1
+            elif rel in modes and stat.S_IMODE(info.st_mode) != modes[rel]:
+                review["metadata_changed_only"] += 1
+        review["missing_by_prefix"] = dict(sorted(prefixes.items(), key=lambda kv: (-kv[1], kv[0]))[:10])
+        return review
+
+    def _verify_pacman(self, gaps: Gaps) -> dict:
+        records = self._pacman_records()
+        modes: dict[str, int] = {}
+        local = self.sys("/var/lib/pacman/local")
+        try:
+            folders = sorted(p for p in local.iterdir() if p.is_dir() and not p.is_symlink())
+        except OSError:
+            folders = []
+        malformed = 0
+        for folder in folders[:PACKAGE_DB_MAX_RECORDS]:
+            data = self._read_mtree(folder / "mtree")
+            if data is None:
+                continue
+            entries, stats = pk.parse_pacman_mtree(data)
+            malformed += stats["malformed"]
+            for rel, attrs in entries.items():
+                if attrs.get("type") == "file" and "mode" in attrs:
+                    modes[rel] = attrs["mode"]
+        review = self._verify_recorded("pacman", records, modes, gaps)
+        review["unparsed_lines"] = malformed
+        return review
+
+    def _verify_apk(self, gaps: Gaps) -> dict:
+        records = self._apk_records()
+        modes: dict[str, int] = {}
+        raw, status = safe_read(self.sys("/lib/apk/db/installed"), APK_DB_MAX_BYTES)
+        malformed = 0
+        if raw is None:
+            self.read_gap(self.sys("/lib/apk/db/installed"), status, gaps)
+        if raw is not None:
+            db, stats = pk.parse_apk_installed(raw)
+            malformed = stats["malformed"]
+            modes = {rel: info["mode"] for rel, info in db["files"].items() if "mode" in info}
+        review = self._verify_recorded("apk", records, modes, gaps)
+        review["unparsed_lines"] = malformed
+        return review
+
     def packages(self) -> None:
+        managers = self.managers()
         installed = {}
-        names = ("openssh-server", "anydesk", "rustdesk", "teamviewer", "x11vnc", "tigervnc-standalone-server",
-                 "chrome-remote-desktop", "clamav", "auditd", "apparmor", "ufw", "firefox", "google-chrome-stable", "brave-browser")
-        for name in names:
-            # dpkg-query is not used: direct passive check of dpkg metadata only.
-            raw, st = safe_read(self.sys("/var/lib/dpkg/info") / f"{name}.list", 128*1024)
-            if raw:
-                installed[name] = True
-        self.stats["packages"] = {"selected_package_filelists_present": sorted(installed)}
+        if "dpkg" in managers:
+            names = ("openssh-server", "anydesk", "rustdesk", "teamviewer", "x11vnc", "tigervnc-standalone-server",
+                     "chrome-remote-desktop", "clamav", "auditd", "apparmor", "ufw", "firefox", "google-chrome-stable", "brave-browser")
+            for name in names:
+                # dpkg-query is not used: direct passive check of dpkg metadata only.
+                raw, st = safe_read(self.sys("/var/lib/dpkg/info") / f"{name}.list", 128*1024)
+                if raw:
+                    installed[name] = True
+        self.stats["packages"] = {"managers": managers, "selected_package_filelists_present": sorted(installed)}
         gaps = Gaps()
-        repos, _ = self._files([self.sys("/etc/apt/sources.list.d")], extensions={".list", ".sources"}, limit=150, gaps=gaps)
-        repos.append(self.sys("/etc/apt/sources.list"))
+        repos = self._repo_config_files(gaps)
         insecure_repo_files = 0
-        for p in repos:
-            raw, st = safe_read(p, 128 * 1024)
+        for manager, p in repos:
+            raw, st = safe_read(p, 256 * 1024)
             if raw is None:
                 self.read_gap(p, st, gaps)
-            if raw:
-                content = raw.decode("utf-8", "replace")
-                if re.search(r"\btrusted\s*=\s*yes\b|\bAllow-Insecure:\s*yes\b", content, re.I):
-                    insecure_repo_files += 1
-                    self.finding("INSECURE_APT_REPOSITORY_SETTING", "medium", "APT source disables trust checks", p,
-                                 {"insecure_auth_override": True}, kind="HARDENING")
+                continue
+            codes = pk.detect_insecure_repo_settings(manager, raw.decode("utf-8", "replace"))
+            if codes:
+                insecure_repo_files += 1
+                self.finding("INSECURE_PACKAGE_SOURCE_SETTING", "medium",
+                             "Package source configuration disables signature or transport trust checks", p,
+                             {"manager": manager, "codes": codes}, kind="HARDENING", attack="T1195.002")
         if self.profile == "deep":
-            verify = self.command("dpkg", ["--verify"], timeout=110, limit=2*1024*1024)
-            if verify["status"] in ("COMPLETED", "PARTIAL") or (verify["exit"] in (1, 2) and bool(verify["stdout"])):
-                review = d.dpkg_verify_review(verify["stdout"])
-                self.stats["package_integrity"] = {**review, "unverified_after_cap": verify["truncated"],
-                                                   "command_exit": verify["exit"]}
-                changed_other = review["content_changed_other_files"]
-                if changed_other:
-                    # Package-owned non-configuration content differs from its record.
-                    self.finding("DPKG_FILE_DRIFT", "medium",
-                                 "Installed non-configuration files differ from package checksums", "dpkg://verify",
-                                 {"content_changed_other_files": changed_other,
-                                  "content_changed_conffiles": review["content_changed_conffiles"]})
-                elif review["content_changed_conffiles"]:
-                    self.finding("DPKG_CONFFILE_CHANGED", "low", "Configuration files differ from their packaged versions",
-                                 "dpkg://verify", {"content_changed_conffiles": review["content_changed_conffiles"]},
-                                 kind="CONTEXT")
-                if review["missing_files"]:
-                    self.finding("DPKG_FILES_MISSING", "low", "Files recorded by installed packages are absent on disk",
-                                 "dpkg://verify", {"missing_files": review["missing_files"],
-                                                   "missing_by_prefix": review["missing_by_prefix"]}, kind="CONTEXT")
-                if review["unverifiable"]:
-                    gaps.add("REQUIRES_SYSTEM_SCOPE" if self.scope == "user" else "PERMISSION_DENIED", review["unverifiable"])
-            else:
-                self.command_gap(verify, gaps)
-                self.stats["package_integrity"] = {"status": verify["status"], "error": verify["error"]}
-            if verify["truncated"]:
-                gaps.add("INPUT_TRUNCATED")
-            detail = "APT source policy + dpkg --verify. Drift is not malware attribution; tracked package content only"
+            integrity: dict[str, Any] = self.stats.setdefault("package_integrity", {})
+            if "dpkg" in managers:
+                review = self._verify_with_command("dpkg", "dpkg", ["--verify"], d.dpkg_verify_review, gaps)
+                if review is not None:
+                    integrity["dpkg"] = review
+                    self._integrity_findings("dpkg", review, "dpkg://verify", gaps)
+            if "rpm" in managers:
+                review = self._verify_with_command("rpm", "rpm", ["-Va"], pk.rpm_verify_review, gaps)
+                if review is not None:
+                    integrity["rpm"] = review
+                    self._integrity_findings("rpm", review, "rpm://verify", gaps)
+            if "pacman" in managers:
+                review = self._verify_pacman(gaps)
+                integrity["pacman"] = review
+                self._integrity_findings("pacman", review, "pacman://mtree", gaps)
+            if "apk" in managers:
+                review = self._verify_apk(gaps)
+                integrity["apk"] = review
+                self._integrity_findings("apk", review, "apk://installed", gaps)
+            if not managers:
+                integrity["none"] = {"status": "NO_PACKAGE_DATABASE"}
+            detail = ("Package source trust settings + package integrity (dpkg --verify, rpm -Va, pacman mtree and apk "
+                      "database digests compared with disk within fixed bounds). Drift is not malware attribution")
         else:
             gaps.add("NOT_IN_PROFILE")
-            detail = "APT source policy and selected package metadata; dpkg --verify runs only in the deep profile"
+            detail = "Package source trust settings and selected package metadata; integrity verification runs only in the deep profile"
         self.stats["repos"] = {"source_files_checked": len(repos), "insecure_source_files": insecure_repo_files}
         self.conclude("packages", detail, gaps, len(repos))
 

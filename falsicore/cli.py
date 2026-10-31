@@ -21,7 +21,7 @@ from .safety import create_run_directory, safe_read
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="falsicore", description="Offline passive Ubuntu compromise triage, not a clean-system certificate.")
+    p = argparse.ArgumentParser(prog="falsicore", description="Offline passive Linux compromise triage, not a clean-system certificate.")
     p.add_argument("--version", action="version", version=__version__)
     sub = p.add_subparsers(dest="action", required=True)
     scan = sub.add_parser("scan", help="Collect, analyze, write and verify a complete private report")

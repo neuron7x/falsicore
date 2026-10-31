@@ -22,7 +22,7 @@ MAX_COMMAND_OUTPUT = 32 * 1024 * 1024
 MAX_DIAGNOSTIC_OUTPUT = 64 * 1024
 TRUSTED_BIN_DIRS = ("/usr/bin", "/usr/sbin", "/bin", "/sbin")
 COMMAND_ALLOWLIST = {
-    "uname", "ss", "ip", "journalctl", "systemctl", "dpkg", "ufw",
+    "uname", "ss", "ip", "journalctl", "systemctl", "dpkg", "rpm", "ufw",
     "mokutil", "aa-status", "crontab", "getent", "lsmod", "findmnt",
     "timedatectl", "sysctl", "snap", "flatpak", "loginctl",
 }

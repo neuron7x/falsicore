@@ -43,7 +43,7 @@ bash run.sh
 
 ```bash
 bash run.sh --profile quick                 # швидкий огляд, без журналів і пакетів
-bash run.sh --profile deep                  # плюс dpkg --verify (довше, до кількох хвилин)
+bash run.sh --profile deep                  # плюс перевірка цілісності пакетів (dpkg/rpm/pacman/apk; до кількох хвилин)
 python3 -I falsicore.pyz explain ЗВІТ        # повторно прочитати перевірений звіт
 python3 -I falsicore.pyz explain --share-safe ЗВІТ   # текст без шляхів, ID і PID
 python3 -I falsicore.pyz verify ЗВІТ         # перевірити цілісність звіту

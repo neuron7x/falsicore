@@ -95,7 +95,7 @@ class RootInjection(unittest.TestCase):
         audit.packages()
         audit.browsers()
         rules = {f["rule"] for f in audit.findings}
-        self.assertEqual(rules, {"INSECURE_APT_REPOSITORY_SETTING", "BROWSER_ENTERPRISE_POLICY"})
+        self.assertEqual(rules, {"INSECURE_PACKAGE_SOURCE_SETTING", "BROWSER_ENTERPRISE_POLICY"})
 
     def test_dpkg_index_keys_are_image_paths(self):
         digest = hashlib.md5(b"content", usedforsecurity=False).hexdigest()

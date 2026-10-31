@@ -4,7 +4,7 @@
 
 ```bash
 bash run.sh                     # standard profile, current user, ~2 s
-bash run.sh --profile deep      # adds package integrity (dpkg --verify), ~60 s
+bash run.sh --profile deep      # adds package integrity (dpkg/rpm/pacman/apk), ~60 s
 ```
 
 ---
@@ -49,7 +49,7 @@ Each claim below is enforced by code and covered by tests.
 **Collection.** Read-only access uses:
 
 - no-follow directory descriptors and bounded reads;
-- a fixed command allowlist (`ss`, `journalctl`, `dpkg --verify`, `aa-status`, …);
+- a fixed command allowlist (`ss`, `journalctl`, `dpkg --verify`, `rpm -Va`, `aa-status`, …);
 - no shell and a minimal environment;
 - per-command deadlines clamped to a whole-scan budget;
 - probes in their own process group, killed afterwards.
@@ -66,11 +66,12 @@ from a closed vocabulary (`docs/DETECTORS.md`).
   and hash, and the parent.
 - *Browser extensions:* ID, name, version, enabled state, granted and declared
   permissions, install source, signature, linked native hosts.
-- *Packages:* `dpkg --verify` lines fall into four classes:
-  - changed content;
-  - changed configuration;
-  - missing file;
-  - unverifiable.
+- *Packages:* the package database present decides the method — `dpkg --verify`
+  and `rpm -Va` through the allowlisted executor; pacman (mtree sha256) and apk
+  (sha1) by comparing recorded digests with the files on disk, within fixed
+  bounds. Results fall into five classes: changed content, changed
+  configuration, missing file, metadata only, unverifiable. Repository trust
+  settings are read for apt, dnf/yum, pacman and apk.
 
 **Static shell analysis.** A quote-aware lexer recognises:
 

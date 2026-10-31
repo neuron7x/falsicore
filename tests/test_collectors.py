@@ -166,7 +166,7 @@ class CollectorFixtureTests(unittest.TestCase):
         self.write(source, "Types: deb\nURIs: https://example.invalid\n")
         self.a._files = lambda *_args, **_kwargs: ([source], False)
         self.a.packages()
-        self.assertFalse(any(x["rule"] == "INSECURE_APT_REPOSITORY_SETTING" for x in self.a.findings))
+        self.assertFalse(any(x["rule"] == "INSECURE_PACKAGE_SOURCE_SETTING" for x in self.a.findings))
         # dpkg --verify is deep-only: declared as a profile limit, not hidden.
         self.assertEqual(self.a.coverage[-1]["scope_limits"], {"NOT_IN_PROFILE": 1})
 
@@ -175,7 +175,7 @@ class CollectorFixtureTests(unittest.TestCase):
         self.write(source, "Types: deb\nAllow-Insecure: yes\n")
         self.a._files = lambda *_args, **_kwargs: ([source], False)
         self.a.packages()
-        self.assertIn("INSECURE_APT_REPOSITORY_SETTING", {x["rule"] for x in self.a.findings})
+        self.assertIn("INSECURE_PACKAGE_SOURCE_SETTING", {x["rule"] for x in self.a.findings})
 
     def test_shell_init_pipeline(self):
         file = self.home / ".bashrc"

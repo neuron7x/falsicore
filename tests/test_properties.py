@@ -66,7 +66,7 @@ if HAVE_HYPOTHESIS:
         max_leaves=20,
     )
     rules = st.sampled_from(["EXECUTABLE_IN_VOLATILE_PATH", "SUSPICIOUS_SHELL_INIT", "POWERFUL_BROWSER_EXTENSION",
-                             "REMOTE_ACCESS_PORT_EXPOSED", "DPKG_FILE_DRIFT", "UNLISTED_RULE"])
+                             "REMOTE_ACCESS_PORT_EXPOSED", "PACKAGE_FILE_DRIFT", "UNLISTED_RULE"])
     severities = st.sampled_from(list(report.SEVERITY_ORDER) + ["unranked"])
     kinds = st.sampled_from(["INDICATOR", "EXPOSURE", "HARDENING", "CONTEXT"])
     observation = st.dictionaries(st.sampled_from(["pid", "ppid", "uid", "start_ticks", "exe_name"]),

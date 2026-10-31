@@ -473,7 +473,7 @@ class PackageVerifyAndLauncher(unittest.TestCase):
         audit.command = lambda *a, **k: {"status": "FAILED", "stdout": "missing     /lib/modules/old/x.ko\n" * 3,
                                          "stderr": "", "exit": 1, "truncated": False, "error": ""}
         audit.packages()
-        self.assertEqual([(f["rule"], f["kind"]) for f in audit.findings], [("DPKG_FILES_MISSING", "CONTEXT")])
+        self.assertEqual([(f["rule"], f["kind"]) for f in audit.findings], [("PACKAGE_FILES_MISSING", "CONTEXT")])
         self.assertEqual(audit.coverage[-1]["scope_limits"], {})
 
     def test_launcher_options_default_to_user_scan(self):

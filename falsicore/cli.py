@@ -28,7 +28,9 @@ def parser() -> argparse.ArgumentParser:
     scan.add_argument("--scope", choices=("user", "system"), default="user")
     scan.add_argument("--profile", choices=tuple(PROFILES), default="standard")
     scan.add_argument("--max-seconds", type=int, help="Bound collection to 5..600 seconds; overruns become coverage gaps")
-    scan.add_argument("--target-user", help="Required for explicit root/system scan")
+    scan.add_argument("--target-user", help="Required for explicit root/system scan and for --root")
+    scan.add_argument("--root", type=Path, help="Scan an offline image mounted at this directory instead of the live host; "
+                      "live-only checks are declared, never inferred")
     scan.add_argument("--incident-at", help="ISO 8601 timestamp with offset; time context, not causal attribution")
     scan.add_argument("--output-base", type=Path, help="Private output parent; default ~/falsicore-runs")
     comparison = scan.add_mutually_exclusive_group()
@@ -253,17 +255,29 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if sys.version_info < (3, 10):
                 raise RuntimeError("Python >=3.10 required")
-            if args.scope == "user" and args.target_user and args.target_user != pwd.getpwuid(os.getuid()).pw_name:
+            if args.root is not None:
+                if args.root.is_symlink() or not args.root.is_dir():
+                    raise ValueError("--root must be an existing directory (a mounted image)")
+                if args.root.absolute() == Path("/"):
+                    raise ValueError("--root / is the live host; omit --root for a live scan")
+            elif args.scope == "user" and args.target_user and args.target_user != pwd.getpwuid(os.getuid()).pw_name:
                 raise PermissionError("Unprivileged scan cannot select another user")
             audit = Audit(scope=args.scope, target_user=args.target_user, incident_at=args.incident_at,
-                          profile=args.profile, max_seconds=args.max_seconds)
+                          profile=args.profile, max_seconds=args.max_seconds,
+                          root=args.root if args.root is not None else "/", offline=args.root is not None)
             if args.compare is not None:
                 _baseline_preflight(args.compare, args.scope, args.profile, audit.uid)
-            parent = args.output_base or (Path("/root/falsicore-runs") if args.scope == "system" else audit.home / "falsicore-runs")
+            if args.output_base is not None:
+                parent = args.output_base
+            elif getattr(audit, "offline", False) or os.geteuid() == 0:
+                parent = Path(pwd.getpwuid(os.geteuid()).pw_dir) / "falsicore-runs"
+            else:
+                parent = audit.home / "falsicore-runs"
             run_dir = create_run_directory(parent)
             progress = Progress(audit)
             budget = args.max_seconds or PROFILES[args.profile]["duration_seconds"]
-            progress(f"FALSICORE {__version__} | profile={args.profile} | scope={args.scope} | uid={os.geteuid()} | "
+            progress(f"FALSICORE {__version__} | profile={args.profile} | scope={args.scope} | "
+                     f"mode={'offline:' + str(args.root) if getattr(audit, 'offline', False) else 'live'} | uid={os.geteuid()} | "
                      f"whole-scan budget={budget}s | collectors={len(PROFILES[args.profile]['checks'])}/{len(COLLECTOR_ORDER)}")
             progress(f"private run directory: {run_dir}")
             with progress:

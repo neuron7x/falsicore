@@ -118,6 +118,7 @@ Requires Linux and Python ≥ 3.10, standard library only.
 |---|---|
 | Scan, current user | `bash run.sh` (`--profile quick` / `deep`) |
 | Scan, whole system (explicit) | `sudo /usr/bin/python3 -I "$PWD/falsicore.pyz" scan --scope system --target-user "$USER" --profile deep` |
+| Scan an offline image (mounted, read-only) | `python3 -I falsicore.pyz scan --root /mnt/image --target-user alice --profile deep` — live-only checks are declared `SKIPPED`, never inferred; users come from the image's `/etc/passwd` |
 | Re-read a report | `python3 -I falsicore.pyz explain RUN` |
 | Verify a report | `python3 -I falsicore.pyz verify RUN` |
 | Verify the application | `python3 -I falsicore.pyz verify-app && python3 -I falsicore.pyz self-test` |

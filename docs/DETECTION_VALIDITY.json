@@ -14,6 +14,7 @@
       },
       "findings": [],
       "incomplete_essential": [],
+      "mode": "live",
       "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
       "passes": true,
       "scope": "user"
@@ -32,9 +33,29 @@
       },
       "findings": [],
       "incomplete_essential": [],
+      "mode": "live",
       "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
       "passes": true,
       "scope": "system"
+    },
+    {
+      "coverage": {
+        "auth": "COMPLETED",
+        "browsers": "COMPLETED",
+        "crossview": "SKIPPED",
+        "environment": "COMPLETED",
+        "kernel": "SKIPPED",
+        "network": "SKIPPED",
+        "packages": "COMPLETED",
+        "persistence": "COMPLETED",
+        "processes": "SKIPPED"
+      },
+      "findings": [],
+      "incomplete_essential": [],
+      "mode": "offline",
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "passes": true,
+      "scope": "user"
     }
   ],
   "does_not_measure": "sensitivity to real malware; shapes not listed; the live host",
@@ -59,7 +80,7 @@
       "positives": 1
     },
     "EXECUTABLE_IN_VOLATILE_PATH": {
-      "benign_twins": 1,
+      "benign_twins": 2,
       "detected": 3,
       "false_alarms": 0,
       "known_gaps": 0,
@@ -80,7 +101,7 @@
       "positives": 2
     },
     "HIDDEN_PROCESS": {
-      "benign_twins": 1,
+      "benign_twins": 2,
       "detected": 2,
       "false_alarms": 0,
       "known_gaps": 0,
@@ -123,10 +144,10 @@
     },
     "PACKAGE_FILE_DRIFT": {
       "benign_twins": 4,
-      "detected": 4,
+      "detected": 5,
       "false_alarms": 0,
       "known_gaps": 0,
-      "positives": 4
+      "positives": 5
     },
     "PACKAGE_METADATA_DRIFT": {
       "benign_twins": 3,
@@ -157,7 +178,7 @@
       "positives": 1
     },
     "REMOTE_ACCESS_PORT_EXPOSED": {
-      "benign_twins": 1,
+      "benign_twins": 2,
       "detected": 2,
       "false_alarms": 0,
       "known_gaps": 0,
@@ -228,10 +249,10 @@
     },
     "SUSPICIOUS_USER_CRONTAB": {
       "benign_twins": 1,
-      "detected": 1,
+      "detected": 2,
       "false_alarms": 0,
       "known_gaps": 0,
-      "positives": 1
+      "positives": 2
     },
     "SYSTEMD_SYMLINK_TO_TEMP": {
       "benign_twins": 0,
@@ -242,10 +263,10 @@
     },
     "SYSTEM_LOADER_PRELOAD": {
       "benign_twins": 0,
-      "detected": 1,
+      "detected": 2,
       "false_alarms": 0,
       "known_gaps": 0,
-      "positives": 1
+      "positives": 2
     },
     "TEMP_PROCESS_PUBLIC_EGRESS": {
       "benign_twins": 1,
@@ -264,9 +285,9 @@
   },
   "rules_without_positive_scenario": [],
   "scenario_counts": {
-    "benign": 26,
+    "benign": 27,
     "known_gap": 2,
-    "positive": 55
+    "positive": 57
   },
   "scenarios": [
     {
@@ -275,6 +296,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "process_from_tmp",
       "notes": "",
       "observed": [
@@ -292,6 +314,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "process_from_tmp_hidden_dir_shm",
       "notes": "",
       "observed": [
@@ -307,6 +330,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "process_from_usr_bin",
       "notes": "",
       "observed": [],
@@ -323,6 +347,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "deleted_running_executable",
       "notes": "",
       "observed": [
@@ -340,6 +365,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "root_process_from_home",
       "notes": "user scope cannot read a root process's exe on a live host; the shape is verified on the fixture",
       "observed": [
@@ -355,6 +381,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "root_process_from_usr",
       "notes": "",
       "observed": [],
@@ -371,6 +398,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "browser_remote_debugging_port_open",
       "notes": "",
       "observed": [
@@ -388,6 +416,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "browser_no_sandbox",
       "notes": "",
       "observed": [
@@ -403,6 +432,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "browser_ordinary_flags",
       "notes": "",
       "observed": [],
@@ -419,6 +449,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "ssh_listening_everywhere",
       "notes": "",
       "observed": [
@@ -436,6 +467,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "vnc_listening_on_lan_address",
       "notes": "",
       "observed": [
@@ -451,6 +483,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "ssh_listening_loopback_only",
       "notes": "",
       "observed": [],
@@ -467,6 +500,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "volatile_process_with_public_connection",
       "notes": "",
       "observed": [
@@ -484,6 +518,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "ordinary_process_with_public_connection",
       "notes": "",
       "observed": [],
@@ -500,6 +535,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "unit_symlink_into_shm",
       "notes": "",
       "observed": [
@@ -517,6 +553,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "unit_execstart_download_pipe",
       "notes": "",
       "observed": [
@@ -534,6 +571,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "unit_execstart_from_tmp",
       "notes": "",
       "observed": [
@@ -551,6 +589,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "user_unit_execstart_from_tmp",
       "notes": "",
       "observed": [
@@ -566,6 +605,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "unit_with_tmp_as_argument",
       "notes": "",
       "observed": [],
@@ -582,6 +622,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "ld_so_preload_present",
       "notes": "",
       "observed": [
@@ -599,6 +640,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "cron_d_executes_from_tmp",
       "notes": "",
       "observed": [
@@ -616,6 +658,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "cron_hourly_download_pipe",
       "notes": "",
       "observed": [
@@ -631,6 +674,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "cron_d_ordinary_job",
       "notes": "",
       "observed": [],
@@ -647,6 +691,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "user_crontab_reboot_from_shm",
       "notes": "",
       "observed": [
@@ -662,6 +707,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "user_crontab_ordinary",
       "notes": "",
       "observed": [],
@@ -678,6 +724,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "bashrc_download_pipe",
       "notes": "",
       "observed": [
@@ -695,6 +742,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "bashrc_eval_of_download",
       "notes": "",
       "observed": [
@@ -712,6 +760,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "bashrc_prompt_command_download",
       "notes": "",
       "observed": [
@@ -729,6 +778,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "bashrc_reverse_shell_dev_tcp",
       "notes": "",
       "observed": [
@@ -746,6 +796,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "bashrc_sources_file_that_executes_from_tmp",
       "notes": "",
       "observed": [
@@ -763,6 +814,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "bashrc_base64_decode_into_shell",
       "notes": "",
       "observed": [
@@ -780,6 +832,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "zshrc_trap_download",
       "notes": "",
       "observed": [
@@ -795,6 +848,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "bashrc_stock_ubuntu_wrappers",
       "notes": "",
       "observed": [],
@@ -809,6 +863,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "bashrc_download_only_in_comment",
       "notes": "",
       "observed": [],
@@ -823,6 +878,7 @@
       "attack": "",
       "detected": false,
       "kind": "known_gap",
+      "mode": "live",
       "name": "bashrc_relative_exec_after_cd",
       "notes": "relative program after cd: no dataflow between commands",
       "observed": [],
@@ -836,6 +892,7 @@
       "attack": "",
       "detected": false,
       "kind": "known_gap",
+      "mode": "live",
       "name": "bashrc_download_via_variable",
       "notes": "download bound to a variable first; reported as EXPANSION_NOT_RESOLVED only",
       "observed": [],
@@ -851,6 +908,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "autostart_exec_from_tmp",
       "notes": "",
       "observed": [
@@ -866,6 +924,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "autostart_ordinary",
       "notes": "",
       "observed": [],
@@ -882,6 +941,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "authorized_keys_world_readable",
       "notes": "",
       "observed": [
@@ -899,6 +959,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "ssh_directory_group_accessible",
       "notes": "",
       "observed": [
@@ -916,6 +977,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "sudoers_nopasswd",
       "notes": "",
       "observed": [
@@ -931,6 +993,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "sudoers_with_password",
       "notes": "",
       "observed": [],
@@ -947,6 +1010,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "chrome_extension_powerful",
       "notes": "",
       "observed": [
@@ -962,6 +1026,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "chrome_extension_powerful_but_disabled",
       "notes": "",
       "observed": [],
@@ -978,6 +1043,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "chrome_extension_corrupt_manifest",
       "notes": "",
       "observed": [
@@ -995,6 +1061,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "firefox_addon_powerful_active",
       "notes": "",
       "observed": [
@@ -1012,6 +1079,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "native_host_in_home",
       "notes": "",
       "observed": [
@@ -1027,6 +1095,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "native_host_in_usr_lib",
       "notes": "",
       "observed": [],
@@ -1043,6 +1112,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "browser_force_install_policy",
       "notes": "",
       "observed": [
@@ -1058,6 +1128,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "browser_policy_without_extensions",
       "notes": "",
       "observed": [],
@@ -1074,6 +1145,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "ssh_login_accepted",
       "notes": "",
       "observed": [
@@ -1089,6 +1161,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "ssh_login_failed_only",
       "notes": "",
       "observed": [],
@@ -1105,6 +1178,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "apt_source_trusted_yes",
       "notes": "",
       "observed": [
@@ -1120,6 +1194,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "apt_source_signed_by",
       "notes": "",
       "observed": [],
@@ -1136,6 +1211,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "dpkg_binary_drift",
       "notes": "",
       "observed": [
@@ -1153,6 +1229,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "dpkg_conffile_changed",
       "notes": "",
       "observed": [
@@ -1170,6 +1247,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "dpkg_files_missing",
       "notes": "",
       "observed": [
@@ -1185,6 +1263,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "dpkg_unreadable_is_not_drift",
       "notes": "",
       "observed": [],
@@ -1203,6 +1282,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "rpm_binary_drift",
       "notes": "",
       "observed": [
@@ -1220,6 +1300,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "rpm_mode_changed_only",
       "notes": "",
       "observed": [
@@ -1235,6 +1316,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "rpm_clean_verify",
       "notes": "",
       "observed": [],
@@ -1253,6 +1335,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "dnf_gpgcheck_off",
       "notes": "",
       "observed": [
@@ -1270,6 +1353,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "pacman_binary_drift",
       "notes": "",
       "observed": [
@@ -1287,6 +1371,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "pacman_conffile_changed",
       "notes": "",
       "observed": [
@@ -1304,6 +1389,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "pacman_binary_missing",
       "notes": "",
       "observed": [
@@ -1321,6 +1407,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "pacman_binary_mode_changed",
       "notes": "",
       "observed": [
@@ -1336,6 +1423,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "pacman_clean",
       "notes": "",
       "observed": [],
@@ -1355,6 +1443,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "pacman_siglevel_never",
       "notes": "",
       "observed": [
@@ -1372,6 +1461,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "apk_binary_drift",
       "notes": "",
       "observed": [
@@ -1387,6 +1477,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "apk_clean",
       "notes": "",
       "observed": [],
@@ -1405,6 +1496,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "apk_allow_untrusted",
       "notes": "",
       "observed": [
@@ -1422,6 +1514,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "hidden_process_readdir_hook",
       "notes": "emulated: a plain file system cannot answer a lookup it does not list, so the harness injects the Tgid a hooked procfs would return",
       "observed": [
@@ -1439,6 +1532,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "hidden_process_lookup_hook",
       "notes": "",
       "observed": [
@@ -1454,6 +1548,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "thread_ids_are_not_hidden_processes",
       "notes": "",
       "observed": [],
@@ -1470,6 +1565,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "hidden_kernel_module",
       "notes": "",
       "observed": [
@@ -1485,6 +1581,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "builtin_module_without_initstate",
       "notes": "",
       "observed": [],
@@ -1501,6 +1598,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "listener_hidden_from_netlink",
       "notes": "",
       "observed": [
@@ -1518,6 +1616,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "listener_hidden_from_procfs",
       "notes": "",
       "observed": [
@@ -1533,6 +1632,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "listener_in_both_views",
       "notes": "",
       "observed": [],
@@ -1549,6 +1649,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "mount_over_proc_pid",
       "notes": "",
       "observed": [
@@ -1564,6 +1665,7 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "binfmt_misc_mount_under_proc",
       "notes": "",
       "observed": [],
@@ -1580,6 +1682,7 @@
       "evidence_ok": true,
       "kind": "positive",
       "missed": [],
+      "mode": "live",
       "name": "syslog_file_ssh_login_without_journald",
       "notes": "journalctl absent (Alpine/Void): /var/log/auth.log is the fallback target",
       "observed": [
@@ -1595,12 +1698,68 @@
       "attack": "",
       "false_alarms": [],
       "kind": "benign",
+      "mode": "live",
       "name": "syslog_file_without_logins",
       "notes": "",
       "observed": [],
       "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
       "rules": [
         "REMOTE_AUTHENTICATION_REVIEW"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1574.006",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "mode": "offline",
+      "name": "offline_image_preload_and_cron_spool",
+      "notes": "crontab comes from the image's spool file, not from a probe",
+      "observed": [
+        "SUSPICIOUS_USER_CRONTAB",
+        "SYSTEM_LOADER_PRELOAD"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "SUSPICIOUS_USER_CRONTAB",
+        "SYSTEM_LOADER_PRELOAD"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1554",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "mode": "offline",
+      "name": "offline_image_dpkg_drift_from_records",
+      "notes": "dpkg --verify would examine the live host; the image's md5sums records are compared with its files",
+      "observed": [
+        "PACKAGE_FILE_DRIFT"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "PACKAGE_FILE_DRIFT"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "mode": "offline",
+      "name": "offline_image_live_probes_never_run",
+      "notes": "the fixture's own /proc and ss text describe a live host and must be ignored for an image",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "EXECUTABLE_IN_VOLATILE_PATH",
+        "HIDDEN_PROCESS",
+        "REMOTE_ACCESS_PORT_EXPOSED"
       ],
       "scope": "user",
       "silent": true

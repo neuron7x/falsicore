@@ -17,9 +17,10 @@ falsicore inspects the running host for traces of intrusion and persistence:
 - network listeners;
 - scheduled and start-up execution;
 - browser extensions and native hosts;
-- authentication logs;
-- package integrity;
-- kernel state.
+- authentication logs (journald, or syslog files where journald is absent);
+- package integrity (dpkg, rpm, pacman, apk);
+- kernel state;
+- cross-view consistency (hidden processes, modules, listeners, mounts over `/proc/<pid>`).
 
 It never modifies the host or contacts the network. For every finding it
 states the observation, the attribution, the benign alternatives, the

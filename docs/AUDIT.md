@@ -122,6 +122,14 @@ The harness paid for itself again when the package collector was generalised
 |---|---|---|---|
 | V-3 | every pacman and apk scenario | `safe_read` refuses a bound above 8 MiB; the new verification passed 64 MiB (files) and 128 MiB (apk database), so the whole `packages` collector raised and was rolled back to `FAILED/COLLECTOR_ERROR` — on every Arch and Alpine host. | bounds set to `safe_read`'s ceiling; larger files count as unverifiable; the scenarios now pass |
 
+Cross-view consistency (`crossview`, 0.1.4) adds four rules whose positive
+scenarios plant a readdir-hidden process, a lookup-hidden process, a module
+live only in sysfs, a listener visible in one socket view only, and a mount
+over `/proc/<pid>`; benign twins plant thread IDs, a built-in module, a
+listener in both views and the standard `binfmt_misc` mount. Report schema
+is `falsicore.summary.v5`; v4 reports are read as LEGACY because the essential
+set and the rule names changed.
+
 Rule renames in 0.1.4 (one rule per observation, the manager is evidence):
 `DPKG_FILE_DRIFT` → `PACKAGE_FILE_DRIFT`, `DPKG_CONFFILE_CHANGED` →
 `PACKAGE_CONFFILE_CHANGED`, `DPKG_FILES_MISSING` → `PACKAGE_FILES_MISSING`,

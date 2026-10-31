@@ -127,6 +127,17 @@ MTREE_MAX_COMPRESSED = 8 * 1024 * 1024
 MTREE_MAX_DECOMPRESSED = 32 * 1024 * 1024
 APK_DB_MAX_BYTES = 8 * 1024 * 1024   # safe_read's ceiling; a larger installed db is not parsed
 
+# Cross-view consistency (Wang et al., "Strider GhostBuster", DSN 2005): the
+# same fact read through two kernel interfaces must agree. A rootkit that
+# hooks one of them (procfs readdir, procfs lookup, /proc/net, sock_diag)
+# leaves a difference that needs no signature. Bounds keep the PID sweep
+# inside the scan budget; candidates are re-checked to exclude races.
+PID_SWEEP_MAX = 4_194_304            # kernel.pid_max ceiling on 64-bit Linux
+PID_SWEEP_CHUNK = 65_536             # budget check interval
+PID_RECHECK_DELAY = 0.05             # seconds between first and confirming probe
+AUTH_LOG_FILES = ("/var/log/auth.log", "/var/log/secure", "/var/log/messages")
+AUTH_LOG_MAX_BYTES = 8 * 1024 * 1024
+
 # Hard whole-scan deadline (A-8). The cooperative budget turns an overrun into
 # PARTIAL and keeps the observations; the hard deadline fires only after a
 # grace period on top of it, so it catches a collector that is truly stuck in
@@ -192,6 +203,27 @@ def _parse_proc_stat(raw: bytes) -> tuple[int, int] | None:
         return None
 
 
+def _live_pid_probe(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _hex_endpoint_port(field: str) -> int | None:
+    """Port of a /proc/net/{tcp,udp}{,6} local_address field (hex, host order)."""
+    _addr, _, port = field.rpartition(":")
+    try:
+        return int(port, 16)
+    except ValueError:
+        return None
+
+
 class Audit:
     def __init__(self, scope: str, target_user: str | None = None, incident_at: str | None = None,
                  profile: str = "standard", max_seconds: int | None = None, root: Path | str = "/"):
@@ -239,6 +271,9 @@ class Audit:
         self.dropped_findings = 0
         self._collector_active = False
         self.hard_deadline_fired = False
+        # Existence oracle for the PID sweep; replaced by fixtures. kill(pid, 0)
+        # sends no signal: EPERM means "exists, not ours", ESRCH means absent.
+        self.pid_probe: Callable[[int], bool] = _live_pid_probe
         self.suspicious_exec_pids: set[int] = set()
         self.native_hosts_by_extension: dict[str, set[str]] = {}
         self._dpkg_index: dict[str, str] | None = None
@@ -1752,10 +1787,14 @@ class Audit:
         gaps = Gaps()
         event_limit = self.profile_config["journal_lines"]
         r = self._journal(["SYSLOG_FACILITY=4", "SYSLOG_FACILITY=10"], 30, event_limit, 30)
+        if r["status"] == "UNAVAILABLE":
+            # No journald (Alpine, Void, Devuan, containers): classic syslog files
+            # are the same target read through a different interface.
+            self._auth_from_syslog_files(gaps, event_limit)
+            return
         self.command_gap(r, gaps)
         if r["status"] not in ("COMPLETED", "PARTIAL"):
-            self.checked("auth", "UNAVAILABLE" if r["status"] == "UNAVAILABLE" else "FAILED",
-                         "No usable journald data; cannot infer absence of intrusion", gaps=gaps)
+            self.checked("auth", "FAILED", "No usable journald data; cannot infer absence of intrusion", gaps=gaps)
             return
         counters, within, lines, malformed, timestamp_errors = self._journal_signals(r["stdout"])
         if counters["SSH_ACCEPTED"]:
@@ -1777,6 +1816,232 @@ class Audit:
             gaps.add("OTHER_ACCOUNTS_NOT_VISIBLE")
         self.conclude("auth", "auth/authpriv journald entries within 30 days; no raw messages retained; absence of logging is not absence of incident",
                       gaps, lines)
+
+    def _auth_from_syslog_files(self, gaps: Gaps, event_limit: int) -> None:
+        """journald-free hosts: /var/log/auth.log, secure or messages, bounded.
+
+        Classic syslog lines carry no year and no facility, so the 30-day
+        window and the incident correlation are not computed; the whole
+        retained file is the target. Unreadable files are incompleteness in
+        system scope and a scope limit in user scope (log group membership).
+        """
+        counters: Counter[str] = Counter()
+        lines = 0
+        files_read: list[str] = []
+        present = 0
+        for name in AUTH_LOG_FILES:
+            path = self.sys(name)
+            try:
+                if not path.is_file() or path.is_symlink():
+                    continue
+            except OSError:
+                continue
+            present += 1
+            raw, status = safe_read(path, AUTH_LOG_MAX_BYTES)
+            if raw is None:
+                if status == "TOO_LARGE":
+                    gaps.add("INPUT_TRUNCATED")
+                else:
+                    self.read_gap(path, status, gaps)
+                continue
+            files_read.append(self.image_path(path))
+            for line in raw.decode("utf-8", "replace").splitlines():
+                if lines >= event_limit:
+                    gaps.add("INPUT_TRUNCATED")
+                    break
+                if not line.strip():
+                    continue
+                lines += 1
+                counters.update(d.detect_journal_message(line))
+        if counters["SSH_ACCEPTED"]:
+            self.finding("REMOTE_AUTHENTICATION_REVIEW", "low",
+                         "SSH logins observed; compare timestamps and source against your own sessions", "syslog://auth",
+                         {"ssh_accepted_count": counters["SSH_ACCEPTED"]}, kind="CONTEXT", attack="T1078")
+        self.stats["auth"] = {"source": "syslog_files", "files": files_read, "events_examined": lines,
+                              "event_counts": dict(counters), "window_days_max": None, "max_event_lines": event_limit,
+                              "event_counts_0_to_72h_after_incident": None}
+        if present == 0:
+            self.checked("auth", "UNAVAILABLE", "Neither journald nor a syslog authentication file is present; "
+                         "cannot infer absence of intrusion", gaps=gaps)
+            return
+        if lines == 0 and not gaps.incomplete:
+            gaps.add("HISTORY_UNAVAILABLE")
+        self.conclude("auth", "syslog authentication files (journald absent); whole retained files, no time window; "
+                      "no raw messages retained; absence of logging is not absence of incident", gaps, lines)
+
+    # ---- cross-view consistency -------------------------------------------------
+    def _listed_pids_and_tids(self) -> tuple[set[int], set[int]]:
+        listed: set[int] = set()
+        tids: set[int] = set()
+        try:
+            names = [e.name for e in self.proc_root.iterdir() if e.name.isdigit()]
+        except OSError:
+            return listed, tids
+        for name in names:
+            listed.add(int(name))
+            try:
+                for task in (self.proc_root / name / "task").iterdir():
+                    if task.name.isdigit():
+                        tids.add(int(task.name))
+            except OSError:
+                continue
+        return listed, tids
+
+    def _tgid_of(self, pid: int) -> int | None | str:
+        """Tgid from /proc/<pid>/status; None if the entry is absent; "UNREADABLE" otherwise."""
+        raw, status = safe_read(self.proc_root / str(pid) / "status", 16_384)
+        if raw is None:
+            return None if status == "ABSENT" else "UNREADABLE"
+        m = re.search(rb"^Tgid:\s+(\d+)", raw, re.M)
+        return int(m.group(1)) if m else "UNREADABLE"
+
+    def _hidden_processes(self, gaps: Gaps, stats: dict[str, Any]) -> None:
+        listed, tids = self._listed_pids_and_tids()
+        raw, _ = safe_read(self.proc_root / "sys/kernel/pid_max", 64)
+        try:
+            pid_max = min(int(raw.decode("ascii", "replace").strip()), PID_SWEEP_MAX) if raw else 32768
+        except ValueError:
+            pid_max = 32768
+        probed = 0
+        candidates: list[int] = []
+        for pid in range(1, pid_max + 1):
+            if pid % PID_SWEEP_CHUNK == 0 and self.over_budget():
+                gaps.add("BUDGET_EXHAUSTED")
+                break
+            probed += 1
+            if pid in listed or pid in tids or not self.pid_probe(pid):
+                continue
+            candidates.append(pid)
+        hidden: list[dict[str, Any]] = []
+        if candidates:
+            time.sleep(PID_RECHECK_DELAY)   # let a process born mid-sweep settle, then confirm
+            listed_again, tids_again = self._listed_pids_and_tids()
+            for pid in candidates[:200]:
+                if pid in listed_again or pid in tids_again or not self.pid_probe(pid):
+                    continue
+                tgid = self._tgid_of(pid)
+                if tgid is None:
+                    how = "LOOKUP_AND_LISTING_HIDDEN"     # kill() knows it, procfs denies it exists
+                elif tgid == "UNREADABLE":
+                    how = "LISTING_HIDDEN_STATUS_UNREADABLE"
+                elif tgid == pid:
+                    how = "LISTING_HIDDEN"                # lookup works, readdir omits it
+                else:
+                    continue                             # a thread born after the listing
+                hidden.append({"pid": pid, "how": how, "boot_id": self.boot_id, "observed_utc": utc_now()})
+        for how in sorted({h["how"] for h in hidden}):
+            group = [h for h in hidden if h["how"] == how]
+            self.finding("HIDDEN_PROCESS", "high",
+                         "A process exists for the kernel (kill probe) but is missing from /proc as listed; "
+                         "a procfs-hiding rootkit is one explanation", "crossview://processes",
+                         {"how": how}, attack="T1014", observed=group[0])
+            for extra in group[1:]:
+                self.findings[-1]["observations"].append(extra)
+        stats["processes"] = {"pid_max_probed": probed, "listed": len(listed), "threads": len(tids),
+                              "candidates": len(candidates), "hidden": len(hidden)}
+
+    def _hidden_modules(self, gaps: Gaps, stats: dict[str, Any]) -> None:
+        raw, status = safe_read(self.proc_root / "modules", 1024 * 1024)
+        if raw is None:
+            self.read_gap(self.proc_root / "modules", status, gaps)
+            return
+        in_proc = {line.split(b" ", 1)[0].decode("ascii", "replace") for line in raw.splitlines() if line.strip()}
+        sys_module = self.sys("/sys/module")
+        loaded_in_sys: set[str] = set()
+        try:
+            for entry in sys_module.iterdir():
+                # Built-in modules have no initstate; loaded ones say "live".
+                state, _ = safe_read(entry / "initstate", 64)
+                if state is not None and state.strip() == b"live":
+                    loaded_in_sys.add(entry.name)
+        except OSError:
+            self.read_gap(sys_module, "FAILED", gaps)
+            return
+        hidden = sorted(loaded_in_sys - in_proc)
+        for name in hidden[:50]:
+            self.finding("HIDDEN_KERNEL_MODULE", "high",
+                         "A loaded kernel module is present in sysfs but absent from /proc/modules; "
+                         "module hiding is a classic rootkit technique", sys_module / name,
+                         {"module_name_id": d.digest(name)}, attack="T1014",
+                         observed={"module_ref": self.source(name), "observed_utc": utc_now()})
+        stats["modules"] = {"proc_modules": len(in_proc), "sysfs_live": len(loaded_in_sys), "hidden": len(hidden)}
+
+    def _procnet_listeners(self) -> set[tuple[str, int]] | None:
+        found: set[tuple[str, int]] = set()
+        any_read = False
+        for name, listen_state in (("tcp", "0A"), ("tcp6", "0A"), ("udp", "07"), ("udp6", "07")):
+            raw, _ = safe_read(self.proc_root / "net" / name, 8 * 1024 * 1024)
+            if raw is None:
+                continue
+            any_read = True
+            for line in raw.decode("ascii", "replace").splitlines()[1:]:
+                fields = line.split()
+                if len(fields) < 4 or fields[3] != listen_state:
+                    continue
+                port = _hex_endpoint_port(fields[1])
+                if port is not None:
+                    found.add((name.rstrip("6"), port))
+        return found if any_read else None
+
+    def _hidden_listeners(self, gaps: Gaps, stats: dict[str, Any]) -> None:
+        before = self._procnet_listeners()
+        if before is None:
+            gaps.add("READ_FAILED")
+            return
+        r = self.command("ss", ["-H", "-tuna", "-p"], timeout=15)
+        if r["status"] not in ("COMPLETED", "PARTIAL"):
+            self.command_gap(r, gaps)
+            return
+        netlink: set[tuple[str, int]] = set()
+        for sock in d.parse_ss(r["stdout"]):
+            if sock["state"] in ("LISTEN", "UNCONN") and sock["local_port"].isdigit():
+                netlink.add((sock["proto"].rstrip("6"), int(sock["local_port"])))
+        after = self._procnet_listeners() or set()
+        stable = before & after                      # present across the ss call: not a race
+        procfs_only = sorted(stable - netlink)
+        netlink_only = sorted(netlink - before - after)
+        for proto, port in procfs_only[:50]:
+            self.finding("HIDDEN_LISTENER", "high",
+                         "A listening socket appears in /proc/net but not in the netlink socket table (ss); "
+                         "one of the two views is being filtered", "crossview://listeners",
+                         {"proto": proto, "port": port, "visible_in": "PROCFS_ONLY"}, attack="T1014")
+        for proto, port in netlink_only[:50]:
+            self.finding("HIDDEN_LISTENER", "high",
+                         "A listening socket appears in the netlink socket table (ss) but not in /proc/net; "
+                         "one of the two views is being filtered", "crossview://listeners",
+                         {"proto": proto, "port": port, "visible_in": "NETLINK_ONLY"}, attack="T1014")
+        stats["listeners"] = {"procfs": len(stable), "netlink": len(netlink),
+                              "procfs_only": len(procfs_only), "netlink_only": len(netlink_only)}
+
+    def _proc_mount_overlays(self, gaps: Gaps, stats: dict[str, Any]) -> None:
+        raw, status = safe_read(self.proc_root / "self/mountinfo", 4 * 1024 * 1024)
+        if raw is None:
+            self.read_gap(self.proc_root / "self/mountinfo", status, gaps)
+            return
+        overlays: list[str] = []
+        for line in raw.decode("utf-8", "replace").splitlines():
+            fields = line.split()
+            if len(fields) > 4 and re.fullmatch(r"/proc/\d+(/.*)?", fields[4]):
+                overlays.append(fields[4])
+        if overlays:
+            self.finding("PROC_PID_MOUNT_OVERLAY", "high",
+                         "Something is mounted over a /proc/<pid> entry, which hides that process from every reader "
+                         "of procfs", "crossview://mounts", {"mount_count": len(overlays)}, attack="T1564.001",
+                         observed={"mount_points": sorted(overlays)[:20], "observed_utc": utc_now()})
+        stats["proc_pid_mounts"] = len(overlays)
+
+    def crossview(self) -> None:
+        """Two kernel views of one fact must agree; disagreement is the finding."""
+        gaps = Gaps()
+        stats: dict[str, Any] = {}
+        self._hidden_processes(gaps, stats)
+        self._hidden_modules(gaps, stats)
+        self._hidden_listeners(gaps, stats)
+        self._proc_mount_overlays(gaps, stats)
+        self.stats["crossview"] = stats
+        self.conclude("crossview", "Cross-view consistency: PID sweep vs /proc listing, /sys/module vs /proc/modules, "
+                      "/proc/net vs netlink, mounts over /proc/<pid>; a rootkit that hooks both views stays unseen",
+                      gaps, stats.get("processes", {}).get("pid_max_probed"))
 
     # (manager, directory or file under the root, extensions or None for every file)
     REPO_CONFIG: tuple[tuple[str, str, frozenset[str] | None], ...] = (

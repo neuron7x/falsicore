@@ -46,7 +46,7 @@ class FalsificationTests(unittest.TestCase):
         self.assertEqual(first, second)
 
     def test_unknown_process_does_not_become_confirmation(self):
-        cov = [{"check":c,"status":"COMPLETED"} for c in ("processes","network","persistence","browsers","auth","packages")]
+        cov = [{"check":c,"status":"COMPLETED"} for c in ("processes","network","persistence","browsers","auth","packages","crossview")]
         vals = [
             [{"severity":"critical", "kind":"INDICATOR"}],
             [{"severity":"high", "kind":"INDICATOR"}],
@@ -56,7 +56,7 @@ class FalsificationTests(unittest.TestCase):
             self.assertNotIn("CONFIRMED", d.interpret_verdict(x, cov))
 
     def test_severity_is_not_compromise_if_kind_exposure(self):
-        cov = [{"check":c,"status":"COMPLETED"} for c in ("processes","network","persistence","browsers","auth","packages")]
+        cov = [{"check":c,"status":"COMPLETED"} for c in ("processes","network","persistence","browsers","auth","packages","crossview")]
         for sev in ("low", "medium", "high", "critical"):
             self.assertEqual(d.interpret_verdict([{"severity":sev,"kind":"EXPOSURE"}], cov), "NO_COMPROMISE_INDICATORS_OBSERVED")
 

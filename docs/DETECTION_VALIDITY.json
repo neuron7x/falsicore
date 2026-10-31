@@ -4,6 +4,7 @@
       "coverage": {
         "auth": "COMPLETED",
         "browsers": "COMPLETED",
+        "crossview": "COMPLETED",
         "environment": "COMPLETED",
         "kernel": "COMPLETED",
         "network": "COMPLETED",
@@ -21,6 +22,7 @@
       "coverage": {
         "auth": "COMPLETED",
         "browsers": "COMPLETED",
+        "crossview": "COMPLETED",
         "environment": "COMPLETED",
         "kernel": "COMPLETED",
         "network": "COMPLETED",
@@ -62,6 +64,27 @@
       "false_alarms": 0,
       "known_gaps": 0,
       "positives": 3
+    },
+    "HIDDEN_KERNEL_MODULE": {
+      "benign_twins": 1,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
+    "HIDDEN_LISTENER": {
+      "benign_twins": 1,
+      "detected": 2,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 2
+    },
+    "HIDDEN_PROCESS": {
+      "benign_twins": 1,
+      "detected": 2,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 2
     },
     "INSECURE_PACKAGE_SOURCE_SETTING": {
       "benign_twins": 1,
@@ -126,6 +149,13 @@
       "known_gaps": 0,
       "positives": 1
     },
+    "PROC_PID_MOUNT_OVERLAY": {
+      "benign_twins": 1,
+      "detected": 1,
+      "false_alarms": 0,
+      "known_gaps": 0,
+      "positives": 1
+    },
     "REMOTE_ACCESS_PORT_EXPOSED": {
       "benign_twins": 1,
       "detected": 2,
@@ -134,11 +164,11 @@
       "positives": 2
     },
     "REMOTE_AUTHENTICATION_REVIEW": {
-      "benign_twins": 1,
-      "detected": 1,
+      "benign_twins": 2,
+      "detected": 2,
       "false_alarms": 0,
       "known_gaps": 0,
-      "positives": 1
+      "positives": 2
     },
     "ROOT_RUNNING_USER_PATH": {
       "benign_twins": 1,
@@ -234,9 +264,9 @@
   },
   "rules_without_positive_scenario": [],
   "scenario_counts": {
-    "benign": 21,
+    "benign": 26,
     "known_gap": 2,
-    "positive": 48
+    "positive": 55
   },
   "scenarios": [
     {
@@ -1385,6 +1415,195 @@
         "INSECURE_PACKAGE_SOURCE_SETTING"
       ],
       "scope": "user"
+    },
+    {
+      "attack": "T1014",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "hidden_process_readdir_hook",
+      "notes": "emulated: a plain file system cannot answer a lookup it does not list, so the harness injects the Tgid a hooked procfs would return",
+      "observed": [
+        "HIDDEN_PROCESS"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "HIDDEN_PROCESS"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1014",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "hidden_process_lookup_hook",
+      "notes": "",
+      "observed": [
+        "HIDDEN_PROCESS"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "HIDDEN_PROCESS"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "thread_ids_are_not_hidden_processes",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "HIDDEN_PROCESS"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1014",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "hidden_kernel_module",
+      "notes": "",
+      "observed": [
+        "HIDDEN_KERNEL_MODULE"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "HIDDEN_KERNEL_MODULE"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "builtin_module_without_initstate",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "HIDDEN_KERNEL_MODULE"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1014",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "listener_hidden_from_netlink",
+      "notes": "",
+      "observed": [
+        "HIDDEN_LISTENER"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "HIDDEN_LISTENER"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "T1014",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "listener_hidden_from_procfs",
+      "notes": "",
+      "observed": [
+        "HIDDEN_LISTENER"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "HIDDEN_LISTENER"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "listener_in_both_views",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "HIDDEN_LISTENER"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1564.001",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "mount_over_proc_pid",
+      "notes": "",
+      "observed": [
+        "PROC_PID_MOUNT_OVERLAY"
+      ],
+      "outcome": "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION",
+      "rules": [
+        "PROC_PID_MOUNT_OVERLAY"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "binfmt_misc_mount_under_proc",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "PROC_PID_MOUNT_OVERLAY"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "T1078",
+      "detected": true,
+      "evidence_ok": true,
+      "kind": "positive",
+      "missed": [],
+      "name": "syslog_file_ssh_login_without_journald",
+      "notes": "journalctl absent (Alpine/Void): /var/log/auth.log is the fallback target",
+      "observed": [
+        "REMOTE_AUTHENTICATION_REVIEW"
+      ],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "REMOTE_AUTHENTICATION_REVIEW"
+      ],
+      "scope": "user"
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "name": "syslog_file_without_logins",
+      "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "REMOTE_AUTHENTICATION_REVIEW"
+      ],
+      "scope": "user",
+      "silent": true
     }
   ],
   "schema": "falsicore.detection-validity.v1",

@@ -12,12 +12,14 @@ from pathlib import Path
 from . import __version__, detectors as d, guide
 from .safety import exclusive_write, write_json, utc_now, safe_read
 
-SCHEMA = "falsicore.summary.v4"
-DOC_SCHEMAS = {"findings.json": "falsicore.findings.v4", "coverage_matrix.json": "falsicore.coverage.v4",
-               "command_audit.json": "falsicore.commands.v4"}
+SCHEMA = "falsicore.summary.v5"
+DOC_SCHEMAS = {"findings.json": "falsicore.findings.v5", "coverage_matrix.json": "falsicore.coverage.v5",
+               "command_audit.json": "falsicore.commands.v5"}
 MARKDOWN_FINDING_LIMIT = 350
 # Older report schemas: file hashes can still be checked, semantics are not re-derived.
-LEGACY_SCHEMAS = {"falsicore.summary.v3"}
+# v4 (0.1.3) differs in the rule set (dpkg-only names) and in the essential
+# checks (no cross-view), so its verdict is not recomputed with v5 rules.
+LEGACY_SCHEMAS = {"falsicore.summary.v3", "falsicore.summary.v4"}
 OUTCOME_UA = {
     "NO_COMPROMISE_INDICATORS_OBSERVED": "У ДОСТУПНИХ перевірених даних ознак компрометації не виявлено; це НЕ доказ повної безпеки.",
     "SUSPICIOUS_ACTIVITY_REQUIRES_INVESTIGATION": "Є індикатори, які потребують незалежної перевірки. Факт злому НЕ встановлено.",

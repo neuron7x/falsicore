@@ -14,7 +14,7 @@ class CLITests(unittest.TestCase):
     def fake(self):
         return SimpleNamespace(scope="user", target_user="fixture", home=Path("/tmp"),
                                findings=[], scan=lambda **_kw: None,
-                               coverage=[{"check":n,"status":"COMPLETED","details":"fake"} for n in ("processes","network","persistence","browsers","auth","packages")],
+                               coverage=[{"check":n,"status":"COMPLETED","details":"fake"} for n in ("processes","network","persistence","browsers","auth","packages","crossview")],
                                commands=[],stats={},private_index={},dropped_findings=0,
                                baseline={"listeners": [], "process_exe_hashes": [], "systemd_units": [], "cron_entry_hashes":[],"ssh_key_fingerprints":[],"browser_extensions":[],"native_hosts":[]})
 

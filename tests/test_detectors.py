@@ -89,14 +89,14 @@ class CoreDetectorTests(unittest.TestCase):
         self.assertTrue(d.is_instruction_contaminated(original))
 
     def test_no_false_positive_compromise(self):
-        cov = [{"check": s, "status": "COMPLETED"} for s in ("processes","network","persistence","browsers","auth","packages")]
+        cov = [{"check": s, "status": "COMPLETED"} for s in ("processes","network","persistence","browsers","auth","packages","crossview")]
         self.assertEqual(d.interpret_verdict([], cov), "NO_COMPROMISE_INDICATORS_OBSERVED")
 
     def test_missing_coverage_is_inconclusive(self):
         self.assertEqual(d.interpret_verdict([], []), "INCONCLUSIVE_DUE_TO_VISIBILITY_LIMITATIONS")
 
     def test_low_hardening_not_compromise(self):
-        cov = [{"check": s, "status": "COMPLETED"} for s in ("processes","network","persistence","browsers","auth","packages")]
+        cov = [{"check": s, "status": "COMPLETED"} for s in ("processes","network","persistence","browsers","auth","packages","crossview")]
         self.assertEqual(d.interpret_verdict([{"severity":"low", "kind":"HARDENING"}], cov), "NO_COMPROMISE_INDICATORS_OBSERVED")
 
     def test_high_indicators_require_investigation(self):

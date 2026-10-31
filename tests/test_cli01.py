@@ -70,7 +70,7 @@ class EndUserInterfaceTests(unittest.TestCase):
         self.assertIn("Unsupported report schema", err)
 
     def test_explain_success_interpretable_and_share_safe(self):
-        summary = {"schema": "falsicore.summary.v4", "outcome": "INCONCLUSIVE_DUE_TO_VISIBILITY_LIMITATIONS",
+        summary = {"schema": "falsicore.summary.v5", "outcome": "INCONCLUSIVE_DUE_TO_VISIBILITY_LIMITATIONS",
                    "outcome_explanation_ua": "coverage gap", "profile": "quick", "scope": "user",
                    "rule_set_version": "x", "finding_counts_by_kind": {"INDICATOR": 1, "EXPOSURE": 2},
                    "cannot_exclude": ["kernel"], "analysis_digest_sha256": "a" * 64}

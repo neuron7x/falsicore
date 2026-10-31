@@ -23,10 +23,35 @@ Examples of detector IDs:
 | `PACKAGE_FILE_DRIFT` | non-configuration package file differs from the package database record (deep; dpkg `--verify`, rpm `-Va`, pacman mtree sha256, apk sha1) | local patch, interrupted upgrade, prelink |
 | `PACKAGE_CONFFILE_CHANGED` / `PACKAGE_FILES_MISSING` | edited conffiles / recorded files absent (deep, context) | admin configuration / leftover modules of removed kernels |
 | `PACKAGE_METADATA_DRIFT` | mode, owner, size or link target of a packaged file differs while content matches (deep, context) | administrator hardening; a new setuid bit is the case to review |
+| `HIDDEN_PROCESS` | the kernel confirms a PID (`kill(pid, 0)`) that `/proc` does not list (readdir hook) or does not even resolve (lookup hook); threads and races are excluded by a confirming pass | almost none |
+| `HIDDEN_KERNEL_MODULE` | a module `live` in `/sys/module` is absent from `/proc/modules` | none (built-ins have no `initstate` and are not counted) |
+| `HIDDEN_LISTENER` | a listening socket is in `/proc/net` but not in the netlink table (`ss`), or the reverse; two `/proc/net` snapshots around the `ss` call exclude open/close races | none |
+| `PROC_PID_MOUNT_OVERLAY` | a mount point over `/proc/<pid>` hides that process from every procfs reader | container runtimes mount inside `/proc`, not over process entries |
 
 **Coverage:** quick profile intentionally omits authentication, package and kernel history. Standard/deep are snapshots rather than continuous EDR. Remote account sessions, encrypted communication contents, advanced rootkits and full disk provenance are out of scope.
 
 **Python AST source audit:** nine rules `FC-AST-001`..`FC-AST-009` detect syntax patterns associated with CWE-94, CWE-78, CWE-502, CWE-377, CWE-295, CWE-400, CWE-703 and CWE-732. Static matching has false positives and negatives: aliases are only partly resolved, dangerous dataflow may not be obvious from a syntax tree, and false positives can be legitimate intentional code. These patterns do not imply CVE existence or exploitability. See `tools/code_audit.py` and `tools/evaluate_rules.py`.
+
+## Cross-view consistency (`crossview`, 0.1.4)
+
+The same fact read through two kernel interfaces must agree; a rootkit that
+hooks one of them leaves a difference that needs no signature (cross-view
+diff, Wang et al., DSN 2005). Four pairs are compared: the PID sweep
+(`kill(pid, 0)` for every PID up to `kernel.pid_max`) against the `/proc`
+listing and its `task/` thread IDs; `/sys/module/*/initstate == live`
+against `/proc/modules`; `/proc/net/{tcp,udp}{,6}` listeners against the
+netlink socket table (`ss`); and `/proc/self/mountinfo` for mounts over
+`/proc/<pid>`. A candidate hidden process is confirmed only after a second
+listing and probe (`PID_RECHECK_DELAY`), and a thread born in between is
+recognised by its `Tgid`. Bounds: `PID_SWEEP_MAX`, the scan budget
+(`BUDGET_EXHAUSTED` makes the check `PARTIAL`). Not claimed: a rootkit that
+hooks both views of a pair, or that hides from the kernel itself, is unseen;
+`crossview` is an essential check for the verdict like the other six.
+
+`auth` without journald: when `journalctl` is absent, `/var/log/auth.log`,
+`/var/log/secure` and `/var/log/messages` are read whole (8 MiB bound). Classic
+syslog lines carry no year, so neither the 30-day window nor the incident
+correlation is computed; the stats say `source: syslog_files`.
 
 ## Coverage reason codes (0.1.3)
 

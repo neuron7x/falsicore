@@ -8,7 +8,9 @@ import json
 import os
 import pwd
 import re
+import signal
 import stat
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -105,6 +107,19 @@ MAX_FILES_PER_COLLECTION = 2000
 MAX_PROCESSES = 6000
 MAX_FINDINGS = 350
 
+# Hard whole-scan deadline (A-8). The cooperative budget turns an overrun into
+# PARTIAL and keeps the observations; the hard deadline fires only after a
+# grace period on top of it, so it catches a collector that is truly stuck in
+# a blocking call (a FIFO, a hung filesystem) and could never reach a budget
+# check. Such a collector is FAILED/BUDGET_EXHAUSTED and its observations are
+# discarded, exactly like any other collector failure.
+HARD_DEADLINE_GRACE_FRACTION = 0.05
+HARD_DEADLINE_MIN_GRACE_SECONDS = 2.0
+
+
+class DeadlineExpired(Exception):
+    """Raised inside a running collector by the hard whole-scan deadline (SIGALRM)."""
+
 
 MAX_CMDLINE_BYTES = 65_536
 MAX_SHELL_FILES = 24
@@ -197,6 +212,8 @@ class Audit:
         }
         self._next = 0
         self.dropped_findings = 0
+        self._collector_active = False
+        self.hard_deadline_fired = False
         self.suspicious_exec_pids: set[int] = set()
         self.native_hosts_by_extension: dict[str, set[str]] = {}
         self._dpkg_index: dict[str, str] | None = None
@@ -330,6 +347,40 @@ class Audit:
         del self.findings[finding_count:]
         del self.coverage[coverage_len:]
 
+    def hard_deadline_seconds(self) -> float:
+        return self.max_seconds + max(HARD_DEADLINE_MIN_GRACE_SECONDS,
+                                      HARD_DEADLINE_GRACE_FRACTION * self.max_seconds)
+
+    def _arm_hard_deadline(self, seconds: float) -> tuple[Any] | None:
+        """Install a one-shot SIGALRM that raises DeadlineExpired inside a collector.
+
+        Signals are delivered to the main thread only, so elsewhere the scan
+        falls back to the cooperative budget and records that it did. Outside a
+        collector (bookkeeping between phases) the alarm only sets a flag: the
+        next budget check sees the expired deadline.
+        """
+        if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "setitimer"):
+            self.stats["hard_deadline"] = {"armed": False, "reason": "NOT_MAIN_THREAD"}
+            return None
+
+        def on_alarm(_signum: int, _frame: object) -> None:
+            self.hard_deadline_fired = True
+            if self._collector_active:
+                raise DeadlineExpired()
+
+        previous = signal.signal(signal.SIGALRM, on_alarm)
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+        self.stats["hard_deadline"] = {"armed": True, "seconds": round(seconds, 3)}
+        return (previous,)
+
+    @staticmethod
+    def _disarm_hard_deadline(armed: tuple[Any] | None) -> None:
+        if armed is None:
+            return
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        previous = armed[0]
+        signal.signal(signal.SIGALRM, previous if previous is not None else signal.SIG_DFL)
+
     def scan(self, progress: Callable[[str], None] | None = None) -> None:
         """Run collectors in fixed order. `progress` receives operator-facing
         phase lines; it must not influence collection or analysis."""
@@ -345,50 +396,65 @@ class Audit:
         started = time.monotonic()
         self.deadline = started + self.max_seconds
         selected = [n for n in COLLECTOR_ORDER if n in self.profile_config["checks"]]
-        for name in COLLECTOR_ORDER:
-            if name not in self.profile_config["checks"]:
-                self.checked(name, "SKIPPED", f"Excluded by {self.profile} profile; not a negative result",
-                             reasons=["PROFILE_EXCLUDED"])
-                continue
-            if self.over_budget():
-                self.checked(name, "SKIPPED", "Runtime budget exhausted before collector started",
-                             reasons=["BUDGET_EXHAUSTED"])
-                emit(f"{name}: SKIPPED (runtime budget exhausted)")
-                continue
-            previous_checks = len(self.coverage)
-            tick = time.monotonic()
-            self.current_phase = name
-            emit(f"[{selected.index(name) + 1}/{len(selected)}] {name}: start")
-            # A failed collector must not contribute findings, baseline state or
-            # partially computed metrics. Keep its command audit for provenance.
-            checkpoint = (
-                len(self.findings), self.dropped_findings, self._next,
-                copy.deepcopy(self.stats), copy.deepcopy(self.baseline),
-                dict(self.private_index), set(self.suspicious_exec_pids),
-            )
-            try:
-                getattr(self, name)()
-            except Exception as exc:
-                self._rollback_collector(checkpoint, previous_checks)
-                self.checked(name, "FAILED", f"collector failed; discarded incomplete observations ({type(exc).__name__})",
-                             reasons=["COLLECTOR_ERROR"])
-                self.stats[f"{name}_exception"] = type(exc).__name__
-            else:
-                if not any(c["check"] == name for c in self.coverage[previous_checks:]):
+        armed = self._arm_hard_deadline(self.hard_deadline_seconds())
+        try:
+            for name in COLLECTOR_ORDER:
+                if name not in self.profile_config["checks"]:
+                    self.checked(name, "SKIPPED", f"Excluded by {self.profile} profile; not a negative result",
+                                 reasons=["PROFILE_EXCLUDED"])
+                    continue
+                if self.over_budget():
+                    self.checked(name, "SKIPPED", "Runtime budget exhausted before collector started",
+                                 reasons=["BUDGET_EXHAUSTED"])
+                    emit(f"{name}: SKIPPED (runtime budget exhausted)")
+                    continue
+                previous_checks = len(self.coverage)
+                tick = time.monotonic()
+                self.current_phase = name
+                emit(f"[{selected.index(name) + 1}/{len(selected)}] {name}: start")
+                # A failed collector must not contribute findings, baseline state or
+                # partially computed metrics. Keep its command audit for provenance.
+                checkpoint = (
+                    len(self.findings), self.dropped_findings, self._next,
+                    copy.deepcopy(self.stats), copy.deepcopy(self.baseline),
+                    dict(self.private_index), set(self.suspicious_exec_pids),
+                )
+                try:
+                    try:
+                        # The alarm may raise only while this flag is set, so the
+                        # exception can surface nowhere but in this except clause.
+                        self._collector_active = True
+                        getattr(self, name)()
+                    finally:
+                        self._collector_active = False
+                except DeadlineExpired:
                     self._rollback_collector(checkpoint, previous_checks)
-                    self.checked(name, "FAILED", "Collector returned without a coverage result; discarded incomplete observations",
+                    self.checked(name, "FAILED", "hard whole-scan deadline interrupted the collector; "
+                                 "discarded incomplete observations", reasons=["BUDGET_EXHAUSTED"])
+                    self.stats[f"{name}_exception"] = "DeadlineExpired"
+                except Exception as exc:
+                    self._rollback_collector(checkpoint, previous_checks)
+                    self.checked(name, "FAILED", f"collector failed; discarded incomplete observations ({type(exc).__name__})",
                                  reasons=["COLLECTOR_ERROR"])
-                elif self.over_budget():
-                    for c in self.coverage[previous_checks:]:
-                        if c["check"] == name and c["status"] in ("COMPLETED", "PARTIAL"):
-                            c["status"] = "PARTIAL"
-                            c["reason_codes"]["BUDGET_EXHAUSTED"] = c["reason_codes"].get("BUDGET_EXHAUSTED", 0) + 1
-                            c["reason_codes"] = dict(sorted(c["reason_codes"].items()))
-                            if "runtime budget exceeded" not in c["details"]:
-                                c["details"] += "; runtime budget exceeded"
-            self.phase_timings[name] = max(0, int((time.monotonic() - tick) * 1000))
-            states = [c["status"] for c in self.coverage[previous_checks:] if c["check"] == name]
-            emit(f"{name}: {states[-1] if states else 'UNKNOWN'} ({self.phase_timings[name]} ms)")
+                    self.stats[f"{name}_exception"] = type(exc).__name__
+                else:
+                    if not any(c["check"] == name for c in self.coverage[previous_checks:]):
+                        self._rollback_collector(checkpoint, previous_checks)
+                        self.checked(name, "FAILED", "Collector returned without a coverage result; discarded incomplete observations",
+                                     reasons=["COLLECTOR_ERROR"])
+                    elif self.over_budget():
+                        for c in self.coverage[previous_checks:]:
+                            if c["check"] == name and c["status"] in ("COMPLETED", "PARTIAL"):
+                                c["status"] = "PARTIAL"
+                                c["reason_codes"]["BUDGET_EXHAUSTED"] = c["reason_codes"].get("BUDGET_EXHAUSTED", 0) + 1
+                                c["reason_codes"] = dict(sorted(c["reason_codes"].items()))
+                                if "runtime budget exceeded" not in c["details"]:
+                                    c["details"] += "; runtime budget exceeded"
+                self.phase_timings[name] = max(0, int((time.monotonic() - tick) * 1000))
+                states = [c["status"] for c in self.coverage[previous_checks:] if c["check"] == name]
+                emit(f"{name}: {states[-1] if states else 'UNKNOWN'} ({self.phase_timings[name]} ms)")
+        finally:
+            self._disarm_hard_deadline(armed)
         self.current_phase = None
         self._correlate_debug_ports()
         if self.dropped_findings:
@@ -396,6 +462,7 @@ class Audit:
                          reasons=["ENUMERATION_LIMIT"])
         self.stats["runtime"] = {"elapsed_ms": int((time.monotonic() - started) * 1000),
                                   "budget_seconds": self.max_seconds,
+                                  "hard_deadline_fired": self.hard_deadline_fired,
                                   "phase_elapsed_ms": self.phase_timings,
                                   "profile": self.profile}
         self.deadline = None

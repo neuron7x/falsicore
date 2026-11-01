@@ -379,7 +379,7 @@ class CrossViewFixture(unittest.TestCase):
                     self.audit._hidden_processes(gaps, stats)
                 self.assertEqual(stats["processes"]["candidates"], count)
                 self.assertEqual(stats["processes"]["pid_max_probed"], 4096)
-                self.assertEqual(dict(gaps.limits).get("ENUMERATION_LIMIT", 0),
+                self.assertEqual(dict(gaps.incomplete).get("ENUMERATION_LIMIT", 0),
                                  count - 200)
 
 

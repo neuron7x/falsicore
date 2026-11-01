@@ -21,6 +21,16 @@ it was measured in.
    manifest, a user-scope scan, and `verify` of its report.
 7. A tampered or extra member in the `.pyz` is refused before any scan.
 
+8. The detection-validity table is current (`python3 tools/validity.py --check`)
+   and passes: every planted shape detected, every benign twin silent, the
+   three unplanted hosts at `NO_COMPROMISE_INDICATORS_OBSERVED`.
+9. Mutants on every runtime line the release changed are killed
+   (`python3 tools/mutate.py --diff <previous release tag>`); the whole-package
+   table is attached as the work list, not as a claim.
+10. `docs/RELEASE_EVIDENCE.json` was produced by `tools/release_evidence.py`
+    for this version with a green suite (`--check`), and `mypy` reports zero
+    errors.
+
 ## Where the results are
 
 - `docs/AUDIT.md`: defect register, gates, coverage, limitations.
@@ -30,9 +40,10 @@ it was measured in.
 
 ## Boundaries
 
-- Measured on Ubuntu 24.04.4 with Python 3.12.3 (host, UID 1000).
-  Python 3.10, 3.13 and 3.14 are exercised only by hosted CI, and are claimed
-  only once that run is observed.
+- Measured on Ubuntu 24.04 with Python 3.12 (host, UID 1000); the exact
+  environment is recorded in `RELEASE_EVIDENCE.json`. Python 3.10, 3.13 and
+  3.14 are exercised only by hosted CI, and are claimed only once that run is
+  observed.
 - No system-scope (root) scan was performed for this release.
 - A checksum is not a signature. An attacker who controls the kernel, or the
   tool and its manifests, can forge internally consistent observations.

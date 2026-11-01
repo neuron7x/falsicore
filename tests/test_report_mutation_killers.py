@@ -163,7 +163,42 @@ class SemanticConsistency(unittest.TestCase):
         self.assertFalse(verify_reports(self.run_dir)["semantic_consistency"])
 
 
+def read_contents(run_dir: Path) -> dict[str, bytes]:
+    return {p.name: p.read_bytes() for p in run_dir.iterdir() if p.name != "evidence_manifest.sha256"}
+
+
+class SemanticConsistencyReturnsBool(unittest.TestCase):
+    """The checker's contract is a bool; callers coerce, so `None` would hide — pin it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        os.umask(0o077)
+        self.run_dir = Path(self.tmp.name) / "run-a"
+        self.run_dir.mkdir(mode=0o700)
+        write_reports(self.run_dir, fake(findings=[finding()]))
+
+    def test_each_rejection_is_exactly_false(self):                   # report:285/293/298/306/320
+        good = read_contents(self.run_dir)
+        self.assertIs(report._semantic_report_consistency(good), True)
+        variants = []
+        c = dict(good); c["findings.json"] = b"[]"; variants.append(c)
+        c = dict(good); doc = json.loads(c["findings.json"]); doc["schema"] = "x"; c["findings.json"] = json.dumps(doc).encode(); variants.append(c)
+        c = dict(good); doc = json.loads(c["findings.json"]); doc["findings"][0]["kind"] = 5; c["findings.json"] = json.dumps(doc).encode(); variants.append(c)
+        c = dict(good); doc = json.loads(c["findings.json"]); doc["findings"].append("text"); c["findings.json"] = json.dumps(doc).encode(); variants.append(c)
+        c = dict(good); doc = json.loads(c["coverage_matrix.json"]); doc["checks"][0]["check"] = 9; c["coverage_matrix.json"] = json.dumps(doc).encode(); variants.append(c)
+        c = dict(good); doc = json.loads(c["summary.json"]); doc["baseline"] = ["x"]; c["summary.json"] = json.dumps(doc).encode(); variants.append(c)
+        c = dict(good); c["summary.json"] = b"{not json"; variants.append(c)
+        for i, contents in enumerate(variants):
+            self.assertIs(report._semantic_report_consistency(contents), False, i)
+
+
 class SummaryShape(unittest.TestCase):
+    def test_mode_defaults_to_live_when_the_audit_has_no_offline_attribute(self):   # report:126
+        audit = fake()
+        del audit.offline
+        self.assertEqual(report_data(audit)["mode"], "live")
+
     def test_mode_and_lists(self):                                     # report:126, 84, 88
         coverage = [{"check": x, "status": "COMPLETED", "details": "", "reason_codes": {}, "scope_limits": {}} for x in ESSENTIAL]
         coverage[0] = {"check": "processes", "status": "PARTIAL", "details": "p", "reason_codes": {"TIMEOUT": 1},
@@ -216,10 +251,19 @@ class MarkdownAndDashboardContent(unittest.TestCase):
         self.assertNotIn("В обробленій телеметрії не виявлено", md)
         self.assertIn("Індикаторів: **1**", md)
         self.assertIn("&quot;q&quot;", html)                            # report:222 quote=True
+        stable = stable_findings([finding()])
+        self.assertIn(f"| {stable[0]['id']} | EXECUTABLE_IN_VOLATILE_PATH |", md)       # report:195 finding row
+        self.assertIn("**Про що саме:** —", md)                                           # report:208 no identity → dash
+        self.assertIn(f"— {stable[0]['id']}</summary>", html)                              # report:236 no identity → id
 
     def test_markdown_without_findings_says_so_and_coverage_note_only_when_incomplete(self):   # report:152/153/200/201
         _, md, html, advice = self.render([])
         self.assertIn("В обробленій телеметрії не виявлено", md)
+        self.assertIn("Індикаторів: **0**; експозицій: **0**; налаштувань: **0**", md)    # report:181 defaults
+        self.assertTrue(any(a.startswith("UPDATES:") for a in advice))                   # report:155
+        self.assertTrue(any(a.startswith("ACCOUNTS:") for a in advice))
+        for item in advice:
+            self.assertIn(f"- {report._safe_markdown(item)}", md)                          # report:213
         self.assertFalse(any(a.startswith("COVERAGE:") for a in advice))
         self.assertIn("Немає евристичних знахідок", html)
         coverage = [{"check": x, "status": "COMPLETED", "details": "", "reason_codes": {}, "scope_limits": {}} for x in ESSENTIAL]
@@ -234,6 +278,8 @@ class MarkdownAndDashboardContent(unittest.TestCase):
         self.assertIn("<strong>1</strong>Індикаторів", html)
         self.assertIn("<strong>2</strong>Експозицій", html)
         self.assertIn("&quot;i&quot;: 1", html)                        # report:243 indent=2 (escaped quotes)
+        _, _, html_u, _ = self.render([finding(evidence={"б": "ї", "а": 1})])
+        self.assertIn("&quot;а&quot;: 1,\n    &quot;б&quot;: &quot;ї&quot;", html_u)      # sort_keys, ensure_ascii=False
         self.assertIn("\n  &quot;evidence&quot;", html)
 
     def test_finding_limit_boundary(self):                             # report:198 > vs >=

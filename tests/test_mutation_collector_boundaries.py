@@ -7,6 +7,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from falsicore import collectors, detectors
 from falsicore.collectors import Audit, Gaps
@@ -73,6 +74,22 @@ class ProcMountVisibility(unittest.TestCase):
         self.audit._hidden_processes(gaps, stats)
         return gaps, stats
 
+
+    def test_hidepid_superblock_option_is_not_missed(self):
+        self.mount.write_text("22 1 0:21 / /proc rw - proc proc rw,hidepid=2\\n")
+        self.assertTrue(collectors._proc_mount_has_hidepid(
+            self.mount.read_bytes().replace(b"\\n", b"\n")))
+        self.mount.write_text("22 1 0:21 / /proc rw - proc proc rw,hidepid=2\n")
+        gaps, stats = self.measure()
+        self.assertEqual(gaps.limits["OTHER_ACCOUNTS_NOT_VISIBLE"], 1)
+        self.assertEqual(stats["processes"]["status"], "HIDEPID_RESTRICTED")
+
+    def test_other_mount_options_cannot_fake_proc_hidepid(self):
+        self.assertFalse(collectors._proc_mount_has_hidepid(
+            b"22 1 0:21 / /proc rw - proc proc rw,hidepid=0\n"))
+        self.assertFalse(collectors._proc_mount_has_hidepid(
+            b"22 1 0:21 / /tmp rw,hidepid=2 - tmpfs tmpfs rw\n"))
+
     def test_hidepid_is_a_scope_limit_with_zero_claimed_hidden_pids(self):
         self.mount.write_text("22 1 0:21 / /proc rw,hidepid=2 - proc proc rw\n")
         gaps, stats = self.measure()
@@ -99,6 +116,45 @@ class ProcMountVisibility(unittest.TestCase):
         self.assertEqual(gaps.incomplete["READ_FAILED"], 1)
         self.assertEqual(stats["processes"]["status"],
                          "MOUNT_VISIBILITY_UNAVAILABLE")
+
+    def test_inaccessible_proc_directory_is_not_an_empty_process_list(self):
+        separate = Audit.__new__(Audit)
+        separate.proc_root = self.proc
+        with patch.object(Path, "iterdir", side_effect=PermissionError("denied")):
+            self.assertIsNone(separate._listed_pids_and_tids())
+
+    def test_incomplete_first_process_listing_never_emits_hidden_process(self):
+        self.mount.write_text("22 1 0:21 / /proc rw - proc proc rw\n")
+        self.audit._listed_pids_and_tids = lambda: None
+        self.audit.pid_probe = lambda pid: True
+        gaps, stats = self.measure()
+        self.assertEqual(gaps.incomplete["READ_FAILED"], 1)
+        self.assertEqual(stats["processes"]["status"], "PROC_ENUMERATION_UNAVAILABLE")
+        self.assertEqual(stats["processes"]["hidden"], 0)
+        self.assertEqual(self.audit.findings, [])
+
+    def test_incomplete_confirmation_listing_invalidates_hiding_inference(self):
+        self.mount.write_text("22 1 0:21 / /proc rw - proc proc rw\n")
+        sightings = iter(((set(), set()), None))
+        self.audit._listed_pids_and_tids = lambda: next(sightings)
+        self.audit.pid_probe = lambda pid: True
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            gaps, stats = self.measure()
+        self.assertEqual(gaps.incomplete["READ_FAILED"], 1)
+        self.assertEqual(stats["processes"]["status"], "PROC_RECHECK_UNAVAILABLE")
+        self.assertEqual(stats["processes"]["hidden"], 0)
+        self.assertEqual(self.audit.findings, [])
+
+    def test_confirmation_cap_is_explicitly_incomplete(self):
+        self.mount.write_text("22 1 0:21 / /proc rw - proc proc rw\n")
+        (self.proc / "sys/kernel/pid_max").write_text("202\n")
+        self.audit.pid_probe = lambda pid: True
+        self.audit._tgid_of = lambda pid: 0
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            gaps, stats = self.measure()
+        self.assertEqual(gaps.incomplete["ENUMERATION_LIMIT"], 2)
+        self.assertEqual(stats["processes"]["candidates"], 202)
+        self.assertEqual(stats["processes"]["hidden"], 0)
 
 
 class SocketTableBounds(unittest.TestCase):

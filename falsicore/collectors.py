@@ -320,6 +320,26 @@ def _ss_listener_endpoints(output: str) -> set[tuple[str, str, int]] | None:
         result.add((fields[0].rstrip("6") + family, str(host), port))
     return result
 
+def _proc_mount_has_hidepid(raw: bytes) -> bool:
+    """Inspect mountinfo mount and superblock options for procfs hiding.
+
+    Linux mountinfo stores filesystem-specific options after the ' - '
+    separator; looking only at field 6 silently misses that case.
+    """
+    for line in raw.decode("utf-8", "replace").splitlines():
+        fields = line.split()
+        if len(fields) < 6 or fields[4] != "/proc":
+            continue
+        options = fields[5].split(",")
+        if "-" in fields:
+            dash = fields.index("-")
+            if len(fields) > dash + 3:
+                options.extend(fields[dash + 3].split(","))
+        if any(re.fullmatch(r"hidepid=(?:1|2|invisible|ptraceable)", opt)
+               for opt in options):
+            return True
+    return False
+
 
 class Audit:
     def __init__(self, scope: str, target_user: str | None = None, incident_at: str | None = None,
@@ -2109,13 +2129,15 @@ class Audit:
             return self.proc_root / str(os.getpid())
         return own
 
-    def _listed_pids_and_tids(self) -> tuple[set[int], set[int]]:
+    def _listed_pids_and_tids(self) -> tuple[set[int], set[int]] | None:
         listed: set[int] = set()
         tids: set[int] = set()
         try:
             names = [e.name for e in self.proc_root.iterdir() if e.name.isdigit()]
         except OSError:
-            return listed, tids
+            # An unreadable proc directory must not masquerade as an empty
+            # directory; cross-view negatives depend on a complete listing.
+            return None
         for name in names:
             listed.add(int(name))
             try:
@@ -2150,16 +2172,17 @@ class Audit:
                 stats["processes"] = {"status": "MOUNT_VISIBILITY_UNAVAILABLE",
                                       "hidden": 0, "pid_max_probed": 0}
                 return
-            if any(
-                len(fields) > 5 and fields[4] == "/proc" and
-                re.search(r"(?:^|,)hidepid=(?:1|2|invisible|ptraceable)(?:,|$)", fields[5])
-                for line in mounts.decode("utf-8", "replace").splitlines()
-                for fields in [line.split()]
-            ):
+            if _proc_mount_has_hidepid(mounts):
                 gaps.add("OTHER_ACCOUNTS_NOT_VISIBLE")
                 stats["processes"] = {"status": "HIDEPID_RESTRICTED", "hidden": 0, "pid_max_probed": 0}
                 return
-        listed, tids = self._listed_pids_and_tids()
+        initial_listing = self._listed_pids_and_tids()
+        if initial_listing is None:
+            gaps.add("READ_FAILED")
+            stats["processes"] = {"status": "PROC_ENUMERATION_UNAVAILABLE",
+                                  "hidden": 0, "pid_max_probed": 0}
+            return
+        listed, tids = initial_listing
         raw, _ = safe_read(self.proc_root / "sys/kernel/pid_max", 64)
         try:
             pid_max = min(int(raw.decode("ascii", "replace").strip()), PID_SWEEP_MAX) if raw else 32768
@@ -2176,9 +2199,20 @@ class Audit:
                 continue
             candidates.append(pid)
         hidden: list[dict[str, Any]] = []
+        if len(candidates) > 200:
+            # The bounded confirmation window cannot establish absence for
+            # unexamined candidates; a partial verdict is mandatory.
+            gaps.add("ENUMERATION_LIMIT", len(candidates) - 200)
         if candidates:
             time.sleep(PID_RECHECK_DELAY)   # let a process born mid-sweep settle, then confirm
-            listed_again, tids_again = self._listed_pids_and_tids()
+            repeated_listing = self._listed_pids_and_tids()
+            if repeated_listing is None:
+                gaps.add("READ_FAILED")
+                stats["processes"] = {"status": "PROC_RECHECK_UNAVAILABLE",
+                                      "pid_max_probed": probed,
+                                      "candidates": len(candidates), "hidden": 0}
+                return
+            listed_again, tids_again = repeated_listing
             for pid in candidates[:200]:
                 if pid in listed_again or pid in tids_again or not self.pid_probe(pid):
                     continue

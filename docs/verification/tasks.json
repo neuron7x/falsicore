@@ -431,7 +431,16 @@
     "falsifier": "Verify signing public key through independent trusted identity channel; repository GitHub Verified or equivalent trust-root proof; sign release manifest/attestation.",
     "acceptance": "Independently verify the signing public key through a trusted identity channel, demonstrate GitHub Verified or equivalent trust-root proof, and sign the release manifest or attestation.",
     "dependencies": [],
-    "falsifier_en": "A release signature has no independently validated signer identity"
+    "falsifier_en": "A release signature has no independently validated signer identity",
+    "observed_failure": {
+      "ref": "refs/tags/v0.2.0",
+      "tag_object_sha": "b5ddfbd34f27b7c42ecdeef58801cda585afba46",
+      "tag_target_sha": "70ed7107bcd6c43a66b4e4cb59db25ee1b3a8516",
+      "verification_verified": false,
+      "verification_reason": "unknown_key",
+      "source": "https://api.github.com/repos/neuron7x/falsicore/git/tags/b5ddfbd34f27b7c42ecdeef58801cda585afba46",
+      "note": "Cannot treat the historical release signature as independently trusted."
+    }
   },
   {
     "id": "FC-28",
@@ -446,7 +455,14 @@
     "falsifier": "Main protection/rulesets enforced; direct push rejected, required exact-head CI before merge; solo maintainer does not need separate human approval.",
     "acceptance": "Enforce main branch protection or rulesets; verify direct push is rejected and exact-HEAD CI is required before merge. A separate human approval is not required for a solo maintainer.",
     "dependencies": [],
-    "falsifier_en": "A protected-branch claim has no enforceable ruleset evidence"
+    "falsifier_en": "A protected-branch claim has no enforceable ruleset evidence",
+    "observed_configuration": {
+      "source": "https://api.github.com/repos/neuron7x/falsicore/branches/main",
+      "main_protected": true,
+      "required_contexts_exclude_evidence": true,
+      "mitigation": "PR static-analysis requires evidence job success; direct evidence required-check setting and administrator policy remain unverified",
+      "note": "Public API settings alone cannot prove bypass prevention or required administrator restrictions."
+    }
   },
   {
     "id": "FC-29",
@@ -464,7 +480,17 @@
       "FC-19",
       "FC-23"
     ],
-    "falsifier_en": "Scheduled mutation runs accept survivors without adequate qualification"
+    "falsifier_en": "Scheduled mutation runs accept survivors without adequate qualification",
+    "observed_failure": {
+      "head_sha": "fbc61da7231cc9d41f3dd27f90976fef765ba234",
+      "scope": "PR-changed runtime lines only, not whole-package mutation coverage",
+      "workflow": "https://github.com/neuron7x/falsicore/actions/runs/41286842056",
+      "mutation_report": "https://github.com/neuron7x/falsicore/actions/runs/41286842056",
+      "generated": 393,
+      "killed": 346,
+      "survived": 47,
+      "note": "Mutation-diff FAIL at this historical SHA; not evidence of the current candidate. Scheduled whole-package waiver removal needs its own completed strict run."
+    }
   },
   {
     "id": "FC-30",
@@ -599,7 +625,12 @@
     "dependencies": [
       "FC-27"
     ],
-    "falsifier_en": "Plain release hashes are treated as signed provenance or an SBOM"
+    "falsifier_en": "Plain release hashes are treated as signed provenance or an SBOM",
+    "observed_configuration": {
+      "release": "https://github.com/neuron7x/falsicore/releases/tag/v0.2.0",
+      "status": "BLOCKED",
+      "note": "Current branch has signed-provenance/SPDX workflow, but no validated release from the current PR head. Never infer build attestation from historical ZIP checksum."
+    }
   },
   {
     "id": "FC-38",

@@ -35,6 +35,13 @@ jobs:
         run: |
           sha256sum -c SOURCE_MANIFEST.sha256
           python tools/build_release.py --check-manifest
+      - name: Validate immutable source act and every task record
+        shell: bash
+        run: |
+          set -euo pipefail
+          ( cd docs/verification/source && sha256sum -c AUDIT_CHECKSUMS.txt )
+          python assurance/check_registry.py
+          python -m unittest discover -s assurance -q
       - name: Syntax
         run: python -m compileall -q falsicore falsicore.py tools
       - name: Install property-testing library (CI only; the tool stays stdlib)

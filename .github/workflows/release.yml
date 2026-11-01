@@ -45,6 +45,10 @@ jobs:
           printf '%s' "$tag_info" | jq -e '.verification.verified == true and .object.type == "commit"'
           test "$(printf '%s' "$tag_info" | jq -er '.tag')" = "$GITHUB_REF_NAME"
           test "$(printf '%s' "$tag_info" | jq -er '.object.sha')" = "$(git rev-parse HEAD)"
+          # No stale or unmerged source may be published under the active
+          # source version: tag and protected main must designate one commit.
+          main_sha="$(gh api "repos/$GH_REPO/branches/main" --jq '.commit.sha')"
+          test "$main_sha" = "$(git rev-parse HEAD)"
       - name: Install required property and static analysis tools
         run: python -m pip install --disable-pip-version-check hypothesis==6.135.26 ruff==0.15.22 bandit==1.8.6 mypy==1.18.2
       - name: Test and audit
@@ -55,6 +59,9 @@ jobs:
           set -euo pipefail
           sha256sum -c SOURCE_MANIFEST.sha256
           python tools/build_release.py --check-manifest
+          ( cd docs/verification/source && sha256sum -c AUDIT_CHECKSUMS.txt )
+          python assurance/check_registry.py
+          python -m unittest discover -s assurance -q
           python -m unittest discover -s tests -q
           python tools/code_audit.py . --fail-on high
           python -m tools.evaluate_rules
@@ -132,6 +139,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          tag_ref="$(gh api "repos/$GH_REPO/git/ref/tags/$GITHUB_REF_NAME")"
+          test "$(printf '%s' "$tag_ref" | jq -er '.object.type')" = tag
+          tag_sha="$(printf '%s' "$tag_ref" | jq -er '.object.sha')"
+          tag_info="$(gh api "repos/$GH_REPO/git/tags/$tag_sha")"
+          printf '%s' "$tag_info" | jq -e '.verification.verified == true and .object.type == "commit"'
+          test "$(printf '%s' "$tag_info" | jq -er '.object.sha')" = "$GITHUB_SHA"
+          test "$(gh api "repos/$GH_REPO/branches/main" --jq '.commit.sha')" = "$GITHUB_SHA"
+          # Build was tested and attested against this tag's exact commit.
           gh release create "$GITHUB_REF_NAME" out/* \
             --verify-tag --title "FALSICORE $GITHUB_REF_NAME" \
             --notes "Experimental offline endpoint triage. No guaranteed malware detection; see SECURITY.md and docs/AUDIT.md. Verify the external .sha256 files before running."

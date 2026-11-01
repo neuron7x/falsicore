@@ -9,6 +9,8 @@ from zipfile import ZipFile
 from tools import build_release
 
 EXPECTED_FILES = {
+    "AGENTS.md",
+    "docs/CODEX_EXECUTION_CONTRACT.md",
     "assurance/check_registry.py",
     "assurance/test_check_registry.py",
     "docs/verification/README.md",
@@ -45,8 +47,16 @@ class VerificationBundleTest(unittest.TestCase):
                     self.assertEqual(data, ("fixture:" + name).encode())
                     self.assertIn(hashlib.sha256(data).hexdigest() + "  " + name + "\n", manifest)
 
+    def test_codex_contract_is_allowlisted_without_an_override_escape(self):
+        self.assertTrue(build_release.allowed_release_path(Path("AGENTS.md")))
+        self.assertTrue(build_release.allowed_release_path(
+            Path("docs/CODEX_EXECUTION_CONTRACT.md")))
+        self.assertFalse(build_release.allowed_release_path(Path("AGENTS.override.md")))
+        self.assertFalse(build_release.allowed_release_path(
+            Path("docs/verification/source/SECRETS.md")))
+
     def test_unknown_or_sensitive_files_fail_packaging(self):
-        for name in ("assurance/secrets.py", "assurance/data/token.txt",
+        for name in ("AGENTS.override.md", "assurance/secrets.py", "assurance/data/token.txt",
                      "docs/verification/private.json", "docs/verification/source/auth.json",
                      "docs/verification/source/nested/FINDINGS.json"):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as td:

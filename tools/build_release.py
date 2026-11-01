@@ -16,6 +16,7 @@ IGNORED_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".
                 ".venv", ".tox", ".falsicore-audit"}
 IGNORED_FILES = {".coverage", "SOURCE_MANIFEST.sha256", ".DS_Store"}
 ROOT_ALLOW = {
+    "AGENTS.md",  # Codex instructions are source-controlled and release-hashed.
     ".gitignore", ".gitattributes", "README.md", "SECURITY.md", "CONTRIBUTING.md",
     "CHANGELOG.md", "Makefile", "run.sh", "falsicore.py", "pyproject.toml",
     "LICENSE", "LICENSE.md",

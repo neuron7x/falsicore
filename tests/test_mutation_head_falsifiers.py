@@ -20,15 +20,15 @@ class ProcMountAdversarialFormat(unittest.TestCase):
     def test_nul_in_mount_options_is_not_unrestricted_policy(self):
         self.assertIsNone(collectors._proc_mount_has_hidepid(
             self.VALID[:-1] + b"\x00\n"))
-        self.assertFalse(collectors._proc_mount_has_hidepid(self.VALID))
+        self.assertIs(collectors._proc_mount_has_hidepid(self.VALID), False)
 
     def test_blank_mountinfo_row_does_not_hide_next_proc_record(self):
-        self.assertFalse(collectors._proc_mount_has_hidepid(
-            b"\n" + self.VALID))
+        self.assertIs(collectors._proc_mount_has_hidepid(
+            b"\n" + self.VALID), False)
 
     def test_five_field_non_proc_record_must_be_ignored(self):
-        self.assertFalse(collectors._proc_mount_has_hidepid(
-            b"22 1 0:21 / /tmp\n" + self.VALID))
+        self.assertIs(collectors._proc_mount_has_hidepid(
+            b"22 1 0:21 / /tmp\n" + self.VALID), False)
 
     def test_four_field_record_requires_an_explicit_unknown_result(self):
         self.assertIsNone(collectors._proc_mount_has_hidepid(
@@ -40,12 +40,17 @@ class ProcMountAdversarialFormat(unittest.TestCase):
 
     def test_separator_before_required_mount_options_is_invalid(self):
         self.assertIsNone(collectors._proc_mount_has_hidepid(
-            b"22 1 0:21 / /proc - proc source rw extra\n"))
+            b"22 1 0:21 / /proc - proc source rw\n"))
+
+    def test_incomplete_nine_field_proc_record_is_unknown(self):
+        # Separator and mount options present, but superblock field omitted.
+        self.assertIsNone(collectors._proc_mount_has_hidepid(
+            b"22 1 0:21 / /proc rw - proc source\n"))
 
     def test_procfs_source_name_is_not_filesystem_type(self):
         # The word after the filesystem type is the mount source, not its type.
-        self.assertFalse(collectors._proc_mount_has_hidepid(
-            b"22 1 0:21 / /proc rw - proc /dev/proc rw\n"))
+        self.assertIs(collectors._proc_mount_has_hidepid(
+            b"22 1 0:21 / /proc rw - proc /dev/proc rw\n"), False)
         self.assertTrue(collectors._proc_mount_has_hidepid(
             b"22 1 0:21 / /proc rw - proc /dev/proc rw,hidepid=2\n"))
 
@@ -92,6 +97,15 @@ class ProcVisibilityResultCounters(unittest.TestCase):
             "hidden": 0, "pid_max_probed": 0})
         self.assertEqual(gaps.incomplete["PARSE_UNSUPPORTED"], 1)
 
+    def test_inaccessible_pid_listing_never_fabricates_zero_hidden_result(self):
+        self.mount.write_bytes(ProcMountAdversarialFormat.VALID)
+        self.audit._listed_pids_and_tids = lambda: None
+        gaps, result = self.measure()
+        self.assertEqual(result, {
+            "status": "PROC_ENUMERATION_UNAVAILABLE",
+            "hidden": 0, "pid_max_probed": 0})
+        self.assertGreater(gaps.incomplete["READ_FAILED"], 0)
+
     def test_one_candidate_is_not_a_confirmation_cap_overflow(self):
         self.mount.write_bytes(ProcMountAdversarialFormat.VALID)
         self.audit.pid_probe = lambda _pid: True
@@ -112,6 +126,16 @@ class ProcVisibilityResultCounters(unittest.TestCase):
         self.assertEqual(result["candidates"], 200)
         self.assertEqual(result["hidden"], 0)
         self.assertNotIn("ENUMERATION_LIMIT", gaps.incomplete)
+
+
+class LexicalRecursionBudget(unittest.TestCase):
+    def test_balanced_default_nesting_budget_has_a_strict_boundary(self):
+        # Alternating double quotes and command substitutions cost two levels
+        # each. Default nesting=0 accepts this; the 0->1 mutant rejects it.
+        source = '(' + '"$(' * 23 + '"literal"' + ')"' * 23 + ')'
+        self.assertEqual(shell_syntax._balanced(source, 1), len(source))
+        with self.assertRaises(shell_syntax._NestingLimit):
+            shell_syntax._balanced(source, 1, nesting=1)
 
 
 class ExecutedInterpreterOperand(unittest.TestCase):

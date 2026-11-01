@@ -339,9 +339,11 @@ def _proc_mount_has_hidepid(raw: bytes) -> bool | None:
         if fields[4] != "/proc":
             continue
         seen_proc = True
-        if len(fields) < 10 or "-" not in fields:
+        if "-" not in fields:
             return None
         dash = fields.index("-")
+        # dash >= 6 and len == dash + 4 establish the 10-field minimum.
+        # Duplicating that bound above makes an unobservable mutant.
         if dash < 6 or len(fields) != dash + 4 or fields[dash + 1] != "proc":
             return None
         options = fields[5].split(",") + fields[dash + 3].split(",")

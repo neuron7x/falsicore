@@ -198,6 +198,38 @@ class Retry(unittest.TestCase):
         self.assertTrue(all(m.status != "ANNOTATED" for m in zero))
 
 
+    def test_all_or_module_with_zero_generated_mutants_fails_closed(self):
+        # A broken generator or empty selection cannot certify a full package.
+        # Pre-fix --all and --module incorrectly returned exit 0 for this case.
+        empty = {"modules": ["detectors"], "mutants": [], "counts": {},
+                 "mutation_score": None, "test_selection": True,
+                 "wall_clock_seconds": 0.0}
+        with patch.object(mutate, "run", return_value=empty), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(mutate.main(["--all"]), 1)
+            self.assertEqual(mutate.main(["--module", "detectors"]), 1)
+        self.assertIn("NOT_MEASURED", errors.getvalue())
+
+        # Benign twin: an actually executed and killed mutant still passes.
+        killed = {**empty, "mutants": [{"status": "KILLED"}],
+                  "counts": {"KILLED": 1}}
+        with patch.object(mutate, "run", return_value=killed), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(mutate.main(["--all"]), 0)
+
+    def test_changed_lines_git_diff_is_time_bounded_and_still_parses(self):
+        diff = ("diff --git a/falsicore/detectors.py b/falsicore/detectors.py\n"
+                "+++ b/falsicore/detectors.py\n"
+                "@@ -2,0 +3,1 @@\n+new_code()\n")
+        with patch.object(mutate.shutil, "which", return_value="/usr/bin/git"), \
+             patch.object(mutate.subprocess, "run",
+                          return_value=SimpleNamespace(stdout=diff)) as git:
+            self.assertEqual(mutate.changed_lines("origin/main"), {"detectors": {3}})
+        self.assertTrue(git.call_args.kwargs["check"])
+        self.assertEqual(git.call_args.kwargs.get("timeout"), 120)
+
+
 class FailClosedMutationExecution(unittest.TestCase):
     def test_failed_manifest_generation_is_error_not_a_killed_mutant(self):
         mutant = mutate.Mutant(

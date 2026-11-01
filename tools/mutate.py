@@ -360,7 +360,7 @@ def changed_lines(base: str) -> dict[str, set[int]]:
     if git is None:
         raise SystemExit("git is required for --diff")
     out = subprocess.run([git, "diff", "-U0", base, "--", "falsicore/"], cwd=str(ROOT), capture_output=True,
-                         text=True, check=True).stdout
+                         text=True, check=True, timeout=120).stdout
     return parse_diff(out)
 
 
@@ -498,9 +498,9 @@ def main(argv: list[str] | None = None) -> int:
     # --allow-survivors only permits exploratory survivor measurements.
     incomplete = sum(result["counts"].get(k, 0) for k in ("ERROR", "NOT_RUN", "ANNOTATED", "TIMEOUT"))
     open_items = sum(result["counts"].get(k, 0) for k in ("SURVIVED", "NO_TESTS"))
-    no_selection = bool(args.diff and modules and not result["mutants"])
+    no_selection = not result["mutants"]
     if no_selection:
-        print("Changed runtime code produced zero mutants: NOT_MEASURED", file=sys.stderr)
+        print("Mutation target produced zero mutants: NOT_MEASURED", file=sys.stderr)
     return 0 if not incomplete and not no_selection and (args.allow_survivors or not open_items) else 1
 
 

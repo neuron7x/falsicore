@@ -150,6 +150,14 @@ class Retry(unittest.TestCase):
         with patch.object(mutate, "run", return_value=mocked), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(mutate.main(["--module", "detectors", "--budget", "0", "--allow-survivors"]), 1)
 
+    def test_read_bound_zero_mutant_never_suppressed_by_line_waiver(self):
+        source = ("def f(fd):\n"
+                  "    return os.read(fd, min(65536, 8192))  # no mutate: read sizes pace the loop\n")
+        mutants = mutate.generate("safety", source)
+        zero = [m for m in mutants if m.operator == "int:shift" and m.mutated == "0"]
+        self.assertTrue(zero)
+        self.assertTrue(all(m.status != "ANNOTATED" for m in zero))
+
 
 if __name__ == "__main__":
     unittest.main()

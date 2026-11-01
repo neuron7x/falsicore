@@ -208,7 +208,11 @@ def generate(module: str, source: str, lines: set[int] | None = None) -> list[Mu
                             original=source_lines[line - 1].strip() if line - 1 < len(source_lines) else "",
                             mutated=ast.unparse(replacement).splitlines()[0][:160],
                             mutant_id=f"{module}:{line}:{counter[line]}:{operator}", scope=scope)
-            if NO_MUTATE.search(mutant.original):
+            # A line-level waiver cannot prove equivalence of a read bound:
+            # 65536 -> 0 changes observable child stdout. Execute these
+            # mutations rather than accidentally counting them as waived.
+            sensitive_read = "os.read(" in mutant.original or "os.write(" in mutant.original
+            if NO_MUTATE.search(mutant.original) and not sensitive_read:
                 mutant.status = "ANNOTATED"
                 mutant.detail = mutant.original.split("# no mutate:", 1)[1].strip()
             mutant.detail = mutant.detail or mutated_source  # carries the full source until execution

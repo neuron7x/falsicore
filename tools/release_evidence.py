@@ -107,6 +107,10 @@ def measure() -> dict:
                        ("detection_validity", [py, "tools/validity.py", "--check"])):
         code, out, seconds = run(argv, timeout=900)
         static[name] = {"command": " ".join(a if a != py else "python3" for a in argv), "exit": code, "seconds": seconds}
+        if code != 0:
+            # CI must retain a bounded diagnostic from the actual failed tool.
+            # A bare exit=1 is not enough to reproduce or triage the finding.
+            static[name]["diagnostic_tail"] = out[-4096:]
         if name in ("ruff", "bandit", "mypy"):
             static[name]["version"] = version_of(name)
         if name == "mypy":

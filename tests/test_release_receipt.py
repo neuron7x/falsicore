@@ -63,6 +63,28 @@ class Gate(unittest.TestCase):
              patch.object(g, "repository_head", return_value=None):
             self.assertIn("exact-git-head-not-verified", g.defects(self.make()))
 
+    def test_repository_head_rejects_unresolved_or_relative_git_path(self):
+        for executable in (None, "git", "./git"):
+            with self.subTest(executable=executable), \
+                 patch.object(g.shutil, "which", return_value=executable), \
+                 patch.object(g.subprocess, "run") as invoke:
+                self.assertIsNone(g.repository_head())
+                invoke.assert_not_called()
+
+    def test_repository_head_uses_absolute_git_and_validates_output(self):
+        with patch.object(g.shutil, "which", return_value="/usr/bin/git"), \
+             patch.object(g.subprocess, "run") as invoke:
+            invoke.return_value.stdout = "a" * 40 + "\n"
+            self.assertEqual(g.repository_head(), "a" * 40)
+            self.assertEqual(invoke.call_args.args[0],
+                             ["/usr/bin/git", "rev-parse", "--verify", "HEAD"])
+            self.assertTrue(invoke.call_args.kwargs["check"])
+            invoke.return_value.stdout = "not-a-git-commit\n"
+            self.assertIsNone(g.repository_head())
+            invoke.side_effect = g.subprocess.TimeoutExpired(
+                cmd="/usr/bin/git", timeout=10)
+            self.assertIsNone(g.repository_head())
+
     def test_stale_suite_coverage_and_ancillary_fails_closed(self):
         for mode in ("tests", "coverage", "static", "validity"):
             data = self.make()

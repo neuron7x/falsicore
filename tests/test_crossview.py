@@ -351,6 +351,38 @@ class CrossViewFixture(unittest.TestCase):
         self.assertNotIn("HIDDEN_LISTENER", self.rules())
 
 
+    def test_two_field_non_listener_is_ignored_not_dropped_as_truncated(self):
+        # FC-13/FC-23: exactly two fields can describe an irrelevant state.
+        # Rejecting it as a malformed listener masks other valid observations.
+        self.assertEqual(collectors._ss_listener_endpoints("tcp ESTAB\n"), set())
+        self.assertIsNone(collectors._ss_listener_endpoints("tcp\n"))
+
+    def test_mountinfo_skips_other_mounts_and_checks_proc_superblock(self):
+        # The first line is an unrelated mount: continue must not become break.
+        two_mounts = (b"21 1 0:20 / /run rw - tmpfs tmpfs rw\n"
+                      b"22 1 0:21 / /proc rw - proc proc rw,hidepid=2\n")
+        self.assertIs(collectors._proc_mount_has_hidepid(two_mounts), True)
+        self.assertIs(collectors._proc_mount_has_hidepid(
+            b"22 1 0:21 / /proc rw - proc proc rw\n"), False)
+        # A truncated superblock is not an excuse for an uncaught IndexError.
+        self.assertIs(collectors._proc_mount_has_hidepid(
+            b"22 1 0:21 / /proc rw - proc proc\n"), False)
+
+    def test_candidate_confirmation_cap_has_an_exact_boundary(self):
+        # FC-23: 200 candidates fit; 201 requires one explicitly unexamined
+        # candidate. All PID probes here are hermetic, not real host checks.
+        for count in (200, 201):
+            with self.subTest(count=count):
+                self.audit.pid_probe = lambda pid, end=200 + count: 200 <= pid < end
+                gaps, stats = collectors.Gaps(), {}
+                with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+                    self.audit._hidden_processes(gaps, stats)
+                self.assertEqual(stats["processes"]["candidates"], count)
+                self.assertEqual(stats["processes"]["pid_max_probed"], 4096)
+                self.assertEqual(dict(gaps.limits).get("ENUMERATION_LIMIT", 0),
+                                 count - 200)
+
+
 class LiveCrossView(unittest.TestCase):
     """The real sweep on this machine: the kernel and /proc must agree about our own process."""
 

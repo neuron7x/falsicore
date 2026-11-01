@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -52,10 +53,18 @@ def manifest_fingerprint() -> str:
 
 
 def repository_head() -> str | None:
-    """Return the actual checkout HEAD; an environment variable is not proof."""
+    """Read the actual checkout HEAD with an absolute Git executable path.
+
+    Missing Git, relative PATH entries, command failures or malformed output
+    never become a successful evidence receipt. A trusted CI runner remains
+    an explicit provenance assumption, not something SHA-256 establishes.
+    """
+    git = shutil.which("git")
+    if not git or not Path(git).is_absolute():
+        return None
     try:
         proc = subprocess.run(
-            ["git", "rev-parse", "--verify", "HEAD"], cwd=ROOT,
+            [git, "rev-parse", "--verify", "HEAD"], cwd=ROOT,
             check=True, capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None

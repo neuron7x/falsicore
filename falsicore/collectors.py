@@ -2564,15 +2564,28 @@ class Audit:
         records = self._apk_records()
         modes: dict[str, int] = {}
         raw, status = safe_read(self.sys("/lib/apk/db/installed"), APK_DB_MAX_BYTES)
-        malformed = 0
+        malformed = omitted_lines = 0
+        truncated = False
         if raw is None:
-            self.read_gap(self.sys("/lib/apk/db/installed"), status, gaps)
-        if raw is not None:
+            if status == "ABSENT":
+                # A previously detected package manager lost its installed index.
+                gaps.add("READ_FAILED")
+            else:
+                self.read_gap(self.sys("/lib/apk/db/installed"), status, gaps)
+        else:
             db, stats = pk.parse_apk_installed(raw)
             malformed = stats["malformed"]
+            truncated = stats["truncated"]
+            if malformed:
+                gaps.add("MALFORMED_INPUT", malformed)
+            if truncated:
+                omitted_lines = len(raw.splitlines()) - stats["lines"]
+                gaps.add("ENUMERATION_LIMIT", omitted_lines)
             modes = {rel: info["mode"] for rel, info in db["files"].items() if "mode" in info}
         review = self._verify_recorded("apk", records, modes, gaps)
         review["unparsed_lines"] = malformed
+        review["reference_lines_omitted"] = omitted_lines
+        review["truncated"] = review["truncated"] or truncated
         return review
 
     def packages(self) -> None:

@@ -675,20 +675,19 @@ class _Analysis:
                 elif is_node and flag.startswith("--eval="):
                     # The shell substituted the value inside the *same* word.
                     code_words.append(option)
-                elif flag.startswith(inline) and len(flag) > len(inline):
+                elif flag.startswith(inline):
                     # Short attached form: -cPROGRAM / -ePROGRAM / -rCODE.
                     code_words.append(option)
                 elif (name.startswith("python") and flag.startswith("-")
                       and not flag.startswith("--") and flag.endswith("c")
-                      and len(flag) > 2 and
-                      all(ch in "BbEdEiIOqsSuUvVW" for ch in flag[1:-1])):
+                      and all(ch in "BbEdEiIOqsSuUvVW" for ch in flag[1:-1])):
                     # Explicitly recognized no-value Python short-option group.
                     if position + 1 < len(args):
                         code_words.append(args[position + 1])
                     else:
                         uncertain_code_option = True
                 elif (flag.startswith("--eval") or
-                      (not flag.startswith("--") and inline[1] in flag[1:])):
+                      (not flag.startswith("--") and inline.removeprefix("-") in flag)):
                     # An unfamiliar compound form is NOT proof of executed
                     # code; preserve uncertainty rather than guessing argv.
                     uncertain_code_option = True

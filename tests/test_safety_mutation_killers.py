@@ -93,7 +93,95 @@ class ExecutorBounds(unittest.TestCase):
         self.assertRegex(utc_now(), r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00$")
 
 
+class ExecutorInternals(unittest.TestCase):
+    def test_bound_constants(self):                                    # safety:21/22
+        self.assertEqual(MAX_COMMAND_OUTPUT, 32 * 1024 * 1024)
+        self.assertEqual(safety.MAX_DIAGNOSTIC_OUTPUT, 64 * 1024)
+
+    def test_leader_exit_is_none_while_running(self):                  # safety:98
+        child = subprocess.Popen([PY, "-c", "import time; time.sleep(5)"])
+        try:
+            self.assertIsNone(safety._leader_exit(child.pid))
+        finally:
+            child.kill()
+            child.wait()
+        self.assertIsNone(safety._leader_exit(child.pid))              # reaped: no child any more
+
+    def test_no_descriptor_leak_and_no_fd_inheritance(self):           # safety:132/222/223
+        r, w = os.pipe()
+        os.set_inheritable(r, True)
+        try:
+            before = len(os.listdir("/proc/self/fd"))
+            probe = _run_bounded(PY, ["-c", f"import os; print(os.path.exists('/proc/self/fd/{r}'))"], timeout=5, limit=1024)
+            self.assertEqual(probe["stdout"].strip(), "False")
+            for _ in range(3):
+                _run_bounded(PY, ["-c", "print('x')"], timeout=5, limit=1024)
+            self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+        finally:
+            os.close(r)
+            os.close(w)
+
+    def test_elapsed_is_measured(self):                                # safety:228
+        r = _run_bounded(PY, ["-c", "import time; time.sleep(0.15)"], timeout=5, limit=1024)
+        self.assertGreaterEqual(r["elapsed_ms"], 100)
+        self.assertLess(r["elapsed_ms"], 5000)
+
+    def test_missing_binary_reports_no_residual(self):                 # safety:124
+        r = _run_bounded("/nonexistent/falsicore-probe", [], timeout=5, limit=1024)
+        self.assertIs(r["residual_killed"], False)
+
+    def test_group_cleanup_denied_is_labelled_only_when_no_other_error(self):   # safety:206
+        with patch("falsicore.safety.os.killpg", side_effect=PermissionError(1, "denied")):
+            ok = _run_bounded(PY, ["-c", "pass"], timeout=5, limit=1024)
+            self.assertEqual(ok["error"], "PROCESS_GROUP_CLEANUP_DENIED")
+            slow = _run_bounded(PY, ["-c", "import time; time.sleep(5)"], timeout=0.3, limit=1024)
+            # The first error is kept; with the kill denied the child still holds the pipe, which is then reported too.
+            self.assertTrue(slow["error"].startswith("timeout"))
+            self.assertNotIn("PROCESS_GROUP_CLEANUP_DENIED", slow["error"])
+            self.assertEqual(slow["status"], "FAILED")
+
+    def test_self_test_merges_stderr_into_the_transcript(self):        # safety:378
+        with patch("falsicore.safety._run_bounded", return_value={"status": "COMPLETED"}) as rb:
+            safety.run_test_suite(Path("/nonexistent"))
+        self.assertTrue(rb.call_args.kwargs.get("merge_stderr"))
+        self.assertEqual(rb.call_args.args[0], sys.executable)
+
+    def test_deferred_alarm_is_a_no_op_outside_the_main_thread(self):  # safety:45
+        import threading
+        calls = []
+        with patch("falsicore.safety.signal.pthread_sigmask", side_effect=lambda *a: calls.append(a) or set()):
+            def body():
+                with safety.deferred_alarm():
+                    pass
+            t = threading.Thread(target=body)
+            t.start()
+            t.join(5)
+            self.assertEqual(calls, [])
+            with safety.deferred_alarm():
+                pass
+            self.assertEqual(len(calls), 2)                            # block, then restore
+
+
 class GroupMembers(unittest.TestCase):
+    def test_group_id_not_session_id_is_compared(self):               # safety:248/251 field index
+        import signal
+        import time
+        # A new process group inside OUR session: pgid (field 5) differs from sid (field 6).
+        leader = subprocess.Popen([PY, "-c", "import os, subprocess, sys, time; os.setpgid(0, 0); "
+                                   "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)']); time.sleep(5)"])
+        try:
+            deadline = time.monotonic() + 3
+            while not _group_has_live_members(leader.pid) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(_group_has_live_members(leader.pid))
+            self.assertIs(_group_has_live_members(2**22 - 2), False)
+        finally:
+            try:
+                os.killpg(leader.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            leader.wait()
+
     def test_live_members_of_a_probe_group(self):                       # safety:241-253
         import signal
         import time
@@ -128,6 +216,15 @@ class PrivateRunDirectory(unittest.TestCase):
                 self.assertTrue(run.name.startswith("run-"))
         finally:
             os.umask(previous)
+
+    def test_symlinked_ancestor_of_the_output_base_is_refused(self):   # safety:319
+        with tempfile.TemporaryDirectory() as td:
+            real = Path(td) / "real"
+            real.mkdir(mode=0o700)
+            link = Path(td) / "link"
+            link.symlink_to(real)
+            with self.assertRaises(PermissionError):
+                create_run_directory(link / "runs")
 
     def test_insufficient_disk_space_is_refused(self):                 # safety:334
         with tempfile.TemporaryDirectory() as td:

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Measure the release evidence and write docs/RELEASE_EVIDENCE.json.
+"""Measure local checks; historical snapshots are not release attestations.
 
-Every number in the file comes from a command run here, with its command
-line, exit code and tool version recorded next to it. Nothing is typed in by
-hand. Values apply to the environment recorded in `environment`; hosted CI
-results are asserted only once observed on GitHub.
+Suite, coverage, static and synthetic-validity numbers come from commands
+run here. Mutation testing is NOT run by this tool: current-HEAD mutation
+receipts are separate CI artifacts, not inferred from historical baselines.
+Environment metadata identifies only the execution context, not a
+representative or maintainer host.
 
     python3 tools/release_evidence.py            # measure and write
     python3 tools/release_evidence.py --check    # fail if the committed file is stale (version/schema/counts)
@@ -62,7 +63,8 @@ def measure() -> dict:
         "schema": SCHEMA, "version": __version__, "date_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d"),
         "environment": {"os": os_release(), "kernel": platform.release(), "python": platform.python_version(),
                         "uid_class": "root" if os.geteuid() == 0 else "unprivileged",
-                        "note": "measured on the maintainer host; hosted CI is recorded only after it is observed"},
+                        "host_role": "UNVERIFIED_EXECUTION_ENVIRONMENT",
+                        "note": "Execution context only; representative host identity is not established"},
     }
     code, out, seconds = run([py, "-m", "unittest", "discover", "-s", "tests"])
     ran = re.search(r"^Ran (\d+) tests", out, re.M)
@@ -125,16 +127,13 @@ def measure() -> dict:
                                           "measures": validity["measures"], "does_not_measure": validity["does_not_measure"]}
     except (OSError, KeyError, ValueError):
         evidence["detection_validity"] = {"status": "NOT_MEASURED"}
+    # Mutation testing is not executed here. Historical results belong in
+    # docs/MUTATION.md, not the current HEAD's measured receipt.
     evidence["mutation_testing"] = {
-        "tool": "tools/mutate.py (per-test selection from coverage contexts)",
-        "pull_request_gate": "mutants on changed runtime lines must all be killed (CI job mutation-diff)",
-        "external_baseline_0_1_3": {"commit": "81b5345", "mutants": 14675, "killed": 8236, "survived": 6390,
-                                    "operators": "mutmut 3.3.1 libcst + return->None, negation, call deletion",
-                                    "note": "strings and default-argument removals dominate the survivors"},
-        "detectors_py_in_repo": {"mutants": 307, "open_after_review": 0, "annotated_equivalents": 2, "dead_parameters_removed": 1},
-        "whole_package_table": "weekly workflow mutation.yml (artifact), see docs/MUTATION.md",
+        "changed_line": "NOT_MEASURED_IN_RECEIPT",
+        "whole_package": "NOT_MEASURED_IN_RECEIPT",
     }
-    evidence["not_performed"] = ["system-scope (root) scan on the maintainer host", "malware-corpus validation",
+    evidence["not_performed"] = ["representative authorized privileged live-host scan", "malware-corpus validation",
                                  "cross-platform build reproducibility", "independent third-party review",
                                  "scan of a real offline image (fixture images only)"]
     return evidence

@@ -128,6 +128,17 @@ def defects(receipt: dict) -> list[str]:
     if (not isinstance(validity, dict) or validity.get("passes") is not True
             or validity.get("rules_without_positive_scenario") != []):
         problems.append("synthetic-validity")
+    environment = evidence.get("environment")
+    if (not isinstance(environment, dict)
+            or environment.get("host_role") != "UNVERIFIED_EXECUTION_ENVIRONMENT"):
+        problems.append("environment-host-role")
+    # No mutation command is executed here. Historical counts and asserted
+    # PASS results must not become authenticated exact-HEAD measurements.
+    if evidence.get("mutation_testing") != {
+        "changed_line": "NOT_MEASURED_IN_RECEIPT",
+        "whole_package": "NOT_MEASURED_IN_RECEIPT",
+    }:
+        problems.append("mutation-scope")
     return problems
 
 

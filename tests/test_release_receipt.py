@@ -19,6 +19,11 @@ class Gate(unittest.TestCase):
             "git_head_sha": "c" * 40,
             "head_consistent": True,
             "measurements": {
+                "environment": {"host_role": "UNVERIFIED_EXECUTION_ENVIRONMENT"},
+                "mutation_testing": {
+                    "changed_line": "NOT_MEASURED_IN_RECEIPT",
+                    "whole_package": "NOT_MEASURED_IN_RECEIPT",
+                },
                 "suite": {"exit": 0, "ran": 900, "failed": 0, "errors": 0, "skipped": 0,
                           "test_files": len(list(c.glob("test_*.py")))},
                 "coverage": {"run_exit": 0, "json_exit": 0,
@@ -105,6 +110,34 @@ class Gate(unittest.TestCase):
             receipt["measurements"]["static_analysis"][key]["exit"] = False
             with self.subTest(tool=key):
                 self.assertIn("static:" + key, self.defects(receipt))
+
+    def test_mutation_receipt_cannot_launder_historical_counts_or_ci_pass(self):
+        # Benign twin: an explicit omission is valid, not a PASS claim.
+        self.assertEqual(self.defects(self.make()), [])
+        for field, bad in (("changed_line", "PASS"), ("whole_package", "PASS"),
+                           ("whole_package", {"killed": 307, "survived": 0})):
+            document = self.make()
+            document["measurements"]["mutation_testing"][field] = bad
+            with self.subTest(field=field, bad=bad):
+                self.assertIn("mutation-scope", self.defects(document))
+        document = self.make()
+        document["measurements"]["mutation_testing"]["external_baseline_0_1_3"] = {
+            "mutants": 14675, "killed": 8236, "survived": 6390}
+        self.assertIn("mutation-scope", self.defects(document))
+        document = self.make()
+        del document["measurements"]["mutation_testing"]
+        self.assertIn("mutation-scope", self.defects(document))
+
+    def test_execution_environment_is_not_verified_maintainer_host(self):
+        self.assertEqual(self.defects(self.make()), [])
+        for bad in ("MAINTAINER_HOST", None, True):
+            document = self.make()
+            document["measurements"]["environment"]["host_role"] = bad
+            with self.subTest(bad=bad):
+                self.assertIn("environment-host-role", self.defects(document))
+        document = self.make()
+        document["measurements"].pop("environment")
+        self.assertIn("environment-host-role", self.defects(document))
 
     def test_stale_suite_coverage_and_ancillary_fails_closed(self):
         for mode in ("tests", "coverage", "static", "validity"):

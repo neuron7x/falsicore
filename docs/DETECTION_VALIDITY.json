@@ -234,7 +234,7 @@
       "positives": 2
     },
     "SUSPICIOUS_SHELL_INIT": {
-      "benign_twins": 2,
+      "benign_twins": 4,
       "detected": 7,
       "false_alarms": 0,
       "known_gaps": 2,
@@ -285,7 +285,7 @@
   },
   "rules_without_positive_scenario": [],
   "scenario_counts": {
-    "benign": 27,
+    "benign": 29,
     "known_gap": 2,
     "positive": 57
   },
@@ -851,6 +851,36 @@
       "mode": "live",
       "name": "bashrc_stock_ubuntu_wrappers",
       "notes": "",
+      "observed": [],
+      "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED",
+      "rules": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "mode": "live",
+      "name": "bashrc_eval_of_unattested_program",
+      "notes": "not a finding, but the file stays PARTIAL/PARSE_UNSUPPORTED: starship is not package-attested here",
+      "observed": [],
+      "outcome": "INCONCLUSIVE_DUE_TO_VISIBILITY_LIMITATIONS",
+      "rules": [
+        "SUSPICIOUS_SHELL_INIT"
+      ],
+      "scope": "user",
+      "silent": true
+    },
+    {
+      "attack": "",
+      "false_alarms": [],
+      "kind": "benign",
+      "mode": "live",
+      "name": "bashrc_eval_of_relay_program_output",
+      "notes": "cat relays its input: attestation of cat proves nothing, the file stays PARTIAL",
       "observed": [],
       "outcome": "INCONCLUSIVE_DUE_TO_VISIBILITY_LIMITATIONS",
       "rules": [

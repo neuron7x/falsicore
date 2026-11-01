@@ -62,7 +62,18 @@ reason code; `COMPLETED` cannot carry one.
 
 | Incompleteness | Scope limit |
 |---|---|
-| `PERMISSION_DENIED`, `TOOL_MISSING`, `TOOL_FAILED`, `TIMEOUT`, `INPUT_TRUNCATED`, `ENUMERATION_LIMIT`, `BUDGET_EXHAUSTED`, `PARSE_UNSUPPORTED`, `MALFORMED_INPUT`, `HISTORY_UNAVAILABLE`, `SYMLINK_NOT_FOLLOWED`, `ATTRIBUTION_UNAVAILABLE`, `READ_FAILED` | `OTHER_ACCOUNTS_NOT_VISIBLE`, `REQUIRES_SYSTEM_SCOPE`, `NOT_IN_PROFILE`, `SOURCE_VANISHED`, `PACKAGE_ATTESTED_NOT_PARSED`, `LIVE_ONLY_NOT_IN_OFFLINE_IMAGE` |
+| `PERMISSION_DENIED`, `TOOL_MISSING`, `TOOL_FAILED`, `TIMEOUT`, `INPUT_TRUNCATED`, `ENUMERATION_LIMIT`, `BUDGET_EXHAUSTED`, `PARSE_UNSUPPORTED`, `MALFORMED_INPUT`, `HISTORY_UNAVAILABLE`, `SYMLINK_NOT_FOLLOWED`, `ATTRIBUTION_UNAVAILABLE`, `READ_FAILED` | `OTHER_ACCOUNTS_NOT_VISIBLE`, `REQUIRES_SYSTEM_SCOPE`, `NOT_IN_PROFILE`, `SOURCE_VANISHED`, `PACKAGE_ATTESTED_NOT_PARSED`, `LIVE_ONLY_NOT_IN_OFFLINE_IMAGE`, `EVAL_OF_ATTESTED_PROGRAM_OUTPUT` |
+
+`EVAL_OF_ATTESTED_PROGRAM_OUTPUT` (0.2.0): a start-up file whose only
+unresolved sites are `eval "$(prog …)"` with every `prog` a package-attested,
+non-relay program found in `/usr/bin`, `/bin`, `/usr/sbin` or `/sbin` (never
+`$PATH`, never `/usr/local`). The program's output is not analysed: the trust
+goes to its package, not to its inputs. Relay programs (`cat`, `sed`, `sh`,
+`base64`, …) never qualify because their output is their input; a download or
+a decode in the substitution is a pattern, not a limit; a variable in between
+(`x=$(prog); eval "$x"`) stays `PARSE_UNSUPPORTED`. This is what a stock
+Ubuntu `~/.bashrc` looks like (`dircolors`, `lesspipe`); before 0.2.0 it made
+every desktop `INCONCLUSIVE`.
 
 ## Offline image mode (`--root`, 0.2.0)
 

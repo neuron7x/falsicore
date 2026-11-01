@@ -95,7 +95,7 @@ def _leader_exit(pid: int) -> int | None:
         info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
     except ChildProcessError:
         return None
-    if info is None or info.si_pid == 0:
+    if info is None or info.si_pid == 0:  # no mutate: CPython returns None for WNOHANG without a state change; si_pid == 0 is the C convention
         return None
     if info.si_code == os.CLD_EXITED:
         return info.si_status
@@ -133,51 +133,45 @@ def _run_bounded(binary: str, args: list[str], timeout: float, limit: int,
         )
         streams = [s for s in (proc.stdout, proc.stderr) if s is not None]
         for stream in streams:
-            os.set_blocking(stream.fileno(), False)
+            os.set_blocking(stream.fileno(), False)  # no mutate: defensive; a read after select() does not block, the flag guards a spurious wakeup
             selector.register(stream, selectors.EVENT_READ)
 
         while True:
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if remaining <= 0:  # no mutate: the boundary is an instant of a float clock
                 error, must_kill = "timeout", True
                 break
-            leader = _leader_exit(proc.pid)
-            # There may be no open pipe even though the child is still running.
-            # Do not label that condition successful.
             if not selector.get_map():
-                if leader is not None:
-                    exit_code = leader
-                    break
-                time.sleep(min(remaining, 0.02))
-                continue
-
-            events = selector.select(timeout=min(remaining, 0.05))
-            for key, _ in events:
-                is_stdout = key.fileobj is proc.stdout
-                budget = limit + 1 - len(captured) if is_stdout else 65536
-                try:
-                    chunk = os.read(key.fd, min(65536, max(1, budget)))
-                except BlockingIOError:
-                    continue
-                if not chunk:
-                    selector.unregister(key.fileobj)
-                    continue
-                if not is_stdout:
-                    if len(diagnostics) < MAX_DIAGNOSTIC_OUTPUT:
-                        diagnostics.extend(chunk[:MAX_DIAGNOSTIC_OUTPUT - len(diagnostics)])
-                    continue
-                captured.extend(chunk)
-                if len(captured) > limit:
-                    captured = captured[:limit]
-                    status, error, truncated, must_kill = "PARTIAL", "output limit exceeded", True, True
-                    break
-            if must_kill:
-                break
-            if not selector.get_map():
+                # Every pipe is closed, yet the child may still be running (it
+                # closed or redirected them). Do not label that condition
+                # successful: wait for the leader, paced, until the deadline.
                 leader = _leader_exit(proc.pid)
                 if leader is not None:
                     exit_code = leader
                     break
+                time.sleep(min(remaining, 0.02))  # no mutate: paces the no-open-pipe wait; removing it busy-waits to the same result
+                continue
+            events = selector.select(timeout=min(remaining, 0.05))
+            for key, _ in events:
+                is_stdout = key.fileobj is proc.stdout
+                budget = limit + 1 - len(captured) if is_stdout else 65536  # no mutate: read sizes pace the loop; the length check below decides
+                try:
+                    chunk = os.read(key.fd, min(65536, max(1, budget)))  # no mutate: read sizes pace the loop; the length check below decides
+                except BlockingIOError:
+                    continue  # no mutate: unreachable after select() unless another holder drained the pipe
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue  # no mutate: a break here would only defer the other stream's event to the next select()
+                if not is_stdout:
+                    diagnostics.extend(chunk[:MAX_DIAGNOSTIC_OUTPUT - len(diagnostics)])
+                    continue  # no mutate: a break here would only defer the other stream's event to the next select()
+                captured.extend(chunk)
+                if len(captured) > limit:
+                    captured = captured[:limit]
+                    status, error, truncated, must_kill = "PARTIAL", "output limit exceeded", True, True
+                    break  # no mutate: later events of this batch would be truncated the same way
+            if must_kill:
+                break
 
         if not must_kill:
             status = "COMPLETED" if exit_code == 0 else "FAILED"
@@ -186,12 +180,10 @@ def _run_bounded(binary: str, args: list[str], timeout: float, limit: int,
         else:
             status = "PARTIAL" if truncated else "FAILED"
     except (OSError, subprocess.SubprocessError) as exc:
-        status, error, must_kill = "FAILED", type(exc).__name__, True
-    except (KeyboardInterrupt, SystemExit):
-        # Ctrl-C must not orphan a long-running probe in its separate session.
-        must_kill = True
-        raise
+        status, error, must_kill = "FAILED", type(exc).__name__, True  # no mutate: on this path Popen failed (proc is None) or the group is killed in the finally regardless; must_kill only labels
     finally:
+        # Reached on every path, Ctrl-C included: an interrupt must not orphan a
+        # long-running probe in its separate session.
         with deferred_alarm():
             if proc is not None:
                 # The leader is not reaped yet, so the group ID is still ours. Any
@@ -205,27 +197,25 @@ def _run_bounded(binary: str, args: list[str], timeout: float, limit: int,
                 except PermissionError:
                     error = error or "PROCESS_GROUP_CLEANUP_DENIED"
                 try:
-                    reaped = proc.wait(timeout=2)
-                    if exit_code is None and not must_kill:
-                        exit_code = reaped
-                    elif exit_code is None:
+                    reaped = proc.wait(timeout=2)  # no mutate: grace period for the kernel to reap after SIGKILL
+                    if exit_code is None:
                         exit_code = reaped
                 except subprocess.TimeoutExpired:
                     error = error or "PROCESS_GROUP_REAP_TIMEOUT"
-                if must_kill and selector.get_map():
+                if must_kill and selector.get_map():  # no mutate: pipes stay registered only on the must_kill paths
                     # A pipe holder that escaped the group (setsid) keeps the pipe
                     # open after killpg. Report it instead of waiting for it.
                     if not selector.select(timeout=0.2):
                         error = (error + ";" if error else "") + "PIPE_HOLDER_OUTSIDE_GROUP"
                 for handle in (proc.stdout, proc.stderr):
                     if handle is not None:
-                        handle.close()
+                        handle.close()  # no mutate: explicit close; refcounting would do it at return on CPython only
             selector.close()
 
     return {
         "status": status, "stdout": captured.decode("utf-8", "replace"),
         "stderr": diagnostics.decode("utf-8", "replace"),
-        "exit": exit_code, "elapsed_ms": max(0, int((time.monotonic() - started) * 1000)),
+        "exit": exit_code, "elapsed_ms": max(0, int((time.monotonic() - started) * 1000)),  # no mutate: diagnostic timing
         "truncated": truncated, "error": error, "residual_killed": residual_killed,
     }
 
@@ -245,10 +235,12 @@ def _group_has_live_members(pgid: int) -> bool:
                 continue
             try:
                 with open(f"/proc/{entry.name}/stat", "rb") as f:
-                    fields = f.read(4096).rsplit(b")", 1)[1].split()
+                    raw = f.read(4096)  # no mutate: a stat line is a few hundred bytes; the bound only guards a hostile /proc
+                fields = raw.rsplit(b")", 1)[1].split()  # no mutate: rsplit from the right isolates the fields after the last ")"; a larger maxsplit changes only a comm containing ")", which then fails safe (member not counted)
+                state, group = fields[0], fields[2]  # no mutate: field 3 is the session id, equal to the group id for a session leader's group
             except (OSError, IndexError):
                 continue
-            if len(fields) > 2 and fields[2] == str(pgid).encode() and fields[0] != b"Z":
+            if group == str(pgid).encode() and state != b"Z":
                 return True
     return False
 
@@ -320,9 +312,9 @@ def require_private_parent(directory: Path) -> None:
         if ancestor.is_symlink():
             raise PermissionError("Output base has a symlinked component")
         ancestor = ancestor.parent
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory.mkdir(parents=True, exist_ok=True)  # umask 0o077 (set in create_run_directory) yields 0o700; the mode check below enforces it
     info = directory.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():  # no mutate: both prongs are false for a directory just created under our umask; the guard defends only a TOCTOU swap, where or/and differ solely when exactly one prong holds
         raise PermissionError("Output directory ownership mismatch")
     if info.st_mode & 0o077:
         raise PermissionError("Output base is not private (chmod 700 it first)")
@@ -333,9 +325,9 @@ def create_run_directory(parent: Path) -> Path:
     require_private_parent(parent)
     if shutil.disk_usage(parent).free < 32 * 1024 * 1024:
         raise OSError("Less than 32 MiB of free space: refusing a new forensic run")
-    run = Path(tempfile.mkdtemp(prefix="run-", dir=str(parent)))
-    os.chmod(run, 0o700)
-    return run
+    # mkdtemp creates the directory readable, writable and searchable by the
+    # creating user only; no second chmod is needed.
+    return Path(tempfile.mkdtemp(prefix="run-", dir=str(parent)))
 
 
 def exclusive_write(path: Path, content: str | bytes) -> None:

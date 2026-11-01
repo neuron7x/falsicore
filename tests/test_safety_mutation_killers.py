@@ -254,5 +254,77 @@ class PrivateRunDirectory(unittest.TestCase):
         self.assertTrue(re.fullmatch(r"\d{4}-.*", utc_now()))
 
 
+class ExecutorLoopTermination(unittest.TestCase):
+    """The over-limit break and the post-kill exit code, measured directly."""
+
+    def test_over_limit_with_a_held_pipe_returns_at_once_not_at_the_deadline(self):   # safety:174 break->continue
+        # Writes past the limit, then holds the pipe open. The reader must break
+        # out on the limit, not spin reading nothing until the timeout.
+        r = _run_bounded(PY, ["-c", "import sys, time; sys.stdout.write('a' * 300); sys.stdout.flush(); time.sleep(30)"],
+                         timeout=3, limit=100)
+        self.assertEqual((r["status"], r["truncated"], len(r["stdout"])), ("PARTIAL", True, 100))
+        self.assertIn("output limit", r["error"])
+        self.assertLess(r["elapsed_ms"], 2500, "broke out on the limit, did not spin to the 3 s deadline")
+
+    def test_timeout_records_the_kill_signal_as_the_exit_code(self):      # safety:201 is-None / negate
+        import signal
+        r = _run_bounded(PY, ["-c", "import time; time.sleep(30)"], timeout=1, limit=1024)
+        self.assertEqual(r["status"], "FAILED")
+        self.assertIsNotNone(r["exit"], "the SIGKILL the executor sent is reaped and recorded")
+        self.assertEqual(r["exit"], -signal.SIGKILL)
+
+
+class GroupScanRobustness(unittest.TestCase):
+    """`_group_has_live_members` must fail safe and not let one bad /proc entry blind the scan."""
+
+    def test_unreadable_proc_listing_is_false_not_none_or_true(self):     # safety:231 return False
+        from unittest.mock import patch
+        with patch("falsicore.safety.os.scandir", side_effect=PermissionError):
+            self.assertIs(_group_has_live_members(os.getpgid(0)), False)
+
+    def test_one_unreadable_entry_does_not_abort_the_scan(self):          # safety:242 continue->break
+        import signal
+        import time
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        leader = subprocess.Popen([PY, "-c", "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', "
+                                   "'import time; time.sleep(5)']); time.sleep(5)"], start_new_session=True)
+        try:
+            deadline = time.monotonic() + 3
+            while not _group_has_live_members(leader.pid) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(_group_has_live_members(leader.pid))
+            orig = os.scandir
+            # A vanished pid whose stat cannot be opened, listed BEFORE the real members.
+            items = [SimpleNamespace(name="99999999"), *list(orig("/proc"))]
+
+            class Listing:
+                def __iter__(self): return iter(items)
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+            with patch("falsicore.safety.os.scandir", return_value=Listing()):
+                self.assertTrue(_group_has_live_members(leader.pid),
+                                "a missing /proc entry must not abort the scan before the live member")
+        finally:
+            os.killpg(leader.pid, signal.SIGKILL)
+            leader.wait()
+
+
+class RunDirectoryReuse(unittest.TestCase):
+    def test_missing_intermediates_are_created_then_the_base_is_reused(self):   # safety:315 parents=True / exist_ok=True
+        previous = os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                parent = Path(td) / "deep" / "nested" / "runs"   # intermediates do not exist: parents=True must create them
+                first = create_run_directory(parent)
+                self.assertTrue(parent.is_dir())
+                second = create_run_directory(parent)            # the base exists now: exist_ok=True must allow it
+                self.assertNotEqual(first, second)
+                self.assertTrue(first.is_dir() and second.is_dir())
+                self.assertEqual(oct(parent.stat().st_mode & 0o777), "0o700")
+        finally:
+            os.umask(previous)
+
+
 if __name__ == "__main__":
     unittest.main()

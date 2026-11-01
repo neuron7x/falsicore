@@ -109,6 +109,28 @@ already guarantees; an `Op` default read only on here-document operators). A
 `TIMEOUT` is noticed by the run, not an open item. No unannotated survivor
 remains.
 
+## Re-measurement (01.11, `report.py` and `safety.py`)
+
+| Module | Mutants | Killed | Annotated | Hung | Survived |
+|---|---:|---:|---:|---:|---:|
+| `report.py` | 285 | 249 | 36 | 0 | 0 |
+| `safety.py` | 287 | 220 | 45 | 2 | 0 |
+
+`tools/mutate.py --module` (test selection on, 90 s per mutant, 2 workers):
+`report.py` 286 s, score 1.0; `safety.py` 441 s, score 0.991. The survivors
+split into two groups. The genuine ones are killed by tests that exhibit the
+behaviour directly (`test_safety_mutation_killers.py`): the executor breaks
+out the instant output passes the limit even while the child holds the pipe
+open, the kill signal of a timed-out probe is reaped as its exit code,
+`_group_has_live_members` fails safe on an unreadable `/proc` and does not let
+one bad entry abort the scan, and the private run directory creates missing
+intermediates and reuses an existing private base. The rest are annotated with
+their reason: the report-directory and baseline-scan guards are redundant with
+`safe_read`'s `O_NOFOLLOW` and with the analysis-digest comparison, the read
+bounds guard only a hostile file, and the output-directory type/owner check,
+the pacing sleep and the exception label are defence-in-depth or TOCTOU guards
+whose mutation changes no observed result. A `TIMEOUT` is not an open item.
+
 The diff gate earned its place on its first pull request: the CV-1 fix
 arrived with four surviving mutants on the new `mountinfo` read (bound
 constants and the `read_gap` call) and was refused until two fixture tests

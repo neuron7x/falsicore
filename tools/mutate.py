@@ -20,9 +20,9 @@ gate kills nothing by accident.
     python3 tools/mutate.py --retry run.json          # only the open items of an earlier result
     python3 tools/mutate.py --coverage               # record the per-test coverage contexts first
 
-Exit status 1 when a mutant survives or has no tests, unless its line carries
-`# no mutate: <reason>` (an equivalence or non-behaviour annotation that must
-state its reason).
+Exit status 1 for surviving, untested, or incomplete mutants. Legacy inline
+`# no mutate:` comments are not exemptions: an entire source line cannot be
+certified equivalent to every behavioral mutation by assertion alone.
 """
 from __future__ import annotations
 
@@ -47,7 +47,6 @@ PACKAGE = ROOT / "falsicore"
 WORK = ROOT / ".mutation"               # ignored by the release manifest and git
 COVERAGE_JSON = WORK / "coverage.json"
 SCHEMA = "falsicore.mutation.v1"
-NO_MUTATE = re.compile(r"#\s*no mutate:\s*\S")
 COMPARE_SWAP = {ast.Lt: ast.LtE, ast.LtE: ast.Lt, ast.Gt: ast.GtE, ast.GtE: ast.Gt, ast.Eq: ast.NotEq,
                 ast.NotEq: ast.Eq, ast.In: ast.NotIn, ast.NotIn: ast.In, ast.Is: ast.IsNot, ast.IsNot: ast.Is}
 AUG_SWAP = {ast.Add: ast.Sub, ast.Sub: ast.Add, ast.Mult: ast.FloorDiv, ast.BitOr: ast.BitAnd, ast.BitAnd: ast.BitOr}
@@ -61,7 +60,7 @@ class Mutant:
     original: str
     mutated: str
     mutant_id: str
-    status: str = "PENDING"        # KILLED | SURVIVED | NO_TESTS | TIMEOUT | ANNOTATED | ERROR
+    status: str = "PENDING"        # KILLED | SURVIVED | NO_TESTS | TIMEOUT | ERROR
     tests: int = 0
     seconds: float = 0.0
     detail: str = ""
@@ -189,7 +188,7 @@ def _mutate_span(source: str, node: ast.AST, replacement: ast.AST) -> str:
 
 
 def generate(module: str, source: str, lines: set[int] | None = None) -> list[Mutant]:
-    """Every mutant of `source`; restricted to `lines` when given. Annotated lines are kept but marked."""
+    """Every mutant of `source`; restricted to `lines` when given. No comment waivers."""
     tree = ast.parse(source)
     source_lines = source.splitlines()
     sites = _Sites()
@@ -208,14 +207,9 @@ def generate(module: str, source: str, lines: set[int] | None = None) -> list[Mu
                             original=source_lines[line - 1].strip() if line - 1 < len(source_lines) else "",
                             mutated=ast.unparse(replacement).splitlines()[0][:160],
                             mutant_id=f"{module}:{line}:{counter[line]}:{operator}", scope=scope)
-            # A line-level waiver cannot prove equivalence of a read bound:
-            # 65536 -> 0 changes observable child stdout. Execute these
-            # mutations rather than accidentally counting them as waived.
-            sensitive_read = "os.read(" in mutant.original or "os.write(" in mutant.original
-            if NO_MUTATE.search(mutant.original) and not sensitive_read:
-                mutant.status = "ANNOTATED"
-                mutant.detail = mutant.original.split("# no mutate:", 1)[1].strip()
-            mutant.detail = mutant.detail or mutated_source  # carries the full source until execution
+            # Line-wide annotations are documentation, not mutation-specific proof.
+            # Including os.read bounds, every behavioral candidate is executed.
+            mutant.detail = mutated_source  # carries the full source until execution
             mutants.append(mutant)
     return mutants
 
@@ -231,8 +225,8 @@ def open_signatures(result: dict) -> dict[str, set[Signature]]:
 
     Lines move when unrelated code is edited; the signature does not, so a
     killer-writing cycle re-runs exactly the mutants that were open. A line
-    that has since been annotated changes its text and drops out: the full run
-    reports it as ANNOTATED.
+    that has acquired comments must be remeasured in a fresh full run; a
+    comment cannot establish operator-specific equivalence.
     """
     out: dict[str, set[Signature]] = {}
     for m in result["mutants"]:
@@ -311,6 +305,7 @@ def run_mutant(mutant: Mutant, tests: set[str] | None, workdir: Path, python: st
     """Write the mutated module into a fresh tree copy and run the selected tests with fail-fast."""
     started = time.monotonic()
     if mutant.status == "ANNOTATED":
+        mutant.status, mutant.detail = "ERROR", "unverified mutation waiver rejected"
         return mutant
     if tests is not None and not tests:
         mutant.status, mutant.detail = "NO_TESTS", ""
@@ -422,8 +417,8 @@ def run(modules: dict[str, set[int] | None], workers: int, timeout: float, pytho
         "modules": sorted(modules), "counts": counts, "mutation_score": None if score is None else round(score, 4),
         "mutants": [asdict(m) for m in results],
         "interpretation": "KILLED: a test failed. TIMEOUT: the suite hung (noticed, not open). SURVIVED: no test noticed. NO_TESTS: no test executes the line. "
-                          "ANNOTATED: '# no mutate: <reason>' on the line. Survivors are candidates, not verdicts: "
-                          "equivalence must be shown, not assumed.",
+                          "No line-wide annotation exemptions are applied. Survivors remain open until "
+                          "tested or individually proven equivalent.",
     }
 
 
@@ -493,7 +488,7 @@ def main(argv: list[str] | None = None) -> int:
     # reported but is not an open item. Survivors, untested lines and errors are.
     # --allow-survivors is a measurement mode, never permission to accept
     # errors, unfinished budgets, or a changed semantic file with no mutants.
-    incomplete = sum(result["counts"].get(k, 0) for k in ("ERROR", "NOT_RUN"))
+    incomplete = sum(result["counts"].get(k, 0) for k in ("ERROR", "NOT_RUN", "ANNOTATED"))
     open_items = sum(result["counts"].get(k, 0) for k in ("SURVIVED", "NO_TESTS"))
     no_selection = bool(args.diff and modules and not result["mutants"])
     if no_selection:

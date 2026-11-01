@@ -2,7 +2,7 @@
 
 End-to-end execution (tree copy + subprocess) is exercised by the CI job
 `mutation-diff`; here the pure parts are pinned so the tool cannot silently
-stop generating a class of mutants or start skipping annotated lines.
+stop generating a class of mutants or silently waive annotated lines.
 """
 from __future__ import annotations
 
@@ -41,9 +41,9 @@ class Generation(unittest.TestCase):
         for expected in ("compare", "boolop", "int", "return", "continue->break", "augassign", "call", "if", "bool"):
             self.assertIn(expected, operators, expected)
         for m in mutants:
-            if m.status != "ANNOTATED":
-                ast.parse(m.detail)   # the mutated module is valid Python
-                self.assertNotEqual(m.detail, SNIPPET)
+            self.assertEqual(m.status, "PENDING")
+            ast.parse(m.detail)   # the mutated module is valid Python
+            self.assertNotEqual(m.detail, SNIPPET)
 
     def test_line_restriction_and_identities_are_unique(self):
         mutants = mutate.generate("snippet", SNIPPET, lines={7})
@@ -52,13 +52,30 @@ class Generation(unittest.TestCase):
         ids = [m.mutant_id for m in mutate.generate("snippet", SNIPPET)]
         self.assertEqual(len(ids), len(set(ids)))
 
-    def test_annotation_requires_a_reason_and_marks_the_mutant(self):
+    def test_legacy_line_annotation_never_waives_any_mutant(self):
         mutants = mutate.generate("snippet", SNIPPET, lines={10})
         self.assertTrue(mutants)
-        self.assertTrue(all(m.status == "ANNOTATED" for m in mutants))
-        self.assertEqual(mutants[0].detail, "documentation example")
+        self.assertIn("boolop:swap", {m.operator for m in mutants})
+        self.assertTrue(all(m.status == "PENDING" for m in mutants))
+        self.assertTrue(all(m.detail != SNIPPET for m in mutants))
         bare = mutate.generate("s", "x = 1  # no mutate:\n")
-        self.assertTrue(all(m.status != "ANNOTATED" for m in bare))
+        self.assertTrue(bare)
+        self.assertTrue(all(m.status == "PENDING" for m in bare))
+
+    def test_real_safety_source_annotations_cannot_hide_mutants(self):
+        source = (mutate.PACKAGE / "safety.py").read_text()
+        candidates = [m for m in mutate.generate("safety", source)
+                      if "# no mutate:" in m.original]
+        self.assertGreater(len(candidates), 10)
+        self.assertTrue(all(m.status == "PENDING" for m in candidates))
+
+    def test_obsolete_annotation_status_is_rejected_instead_of_skipped(self):
+        mutant = mutate.Mutant("safety", 1, "int:shift", "x = 1", "0", "example",
+                               status="ANNOTATED")
+        result = mutate.run_mutant(mutant, None, Path("/nonexistent-waiver-test"),
+                                   sys.executable, timeout=1)
+        self.assertEqual(result.status, "ERROR")
+        self.assertIn("waiver", result.detail)
 
     def test_child_stdout_zero_read_mutant_is_executed_and_killed(self):
         """FC-23: 65536 -> 0 is observable, never eligible for a blanket waiver."""

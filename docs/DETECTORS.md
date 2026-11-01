@@ -32,7 +32,7 @@ Examples of detector IDs:
 
 **Python AST source audit:** nine rules `FC-AST-001`..`FC-AST-009` detect syntax patterns associated with CWE-94, CWE-78, CWE-502, CWE-377, CWE-295, CWE-400, CWE-703 and CWE-732. Static matching has false positives and negatives: aliases are only partly resolved, dangerous dataflow may not be obvious from a syntax tree, and false positives can be legitimate intentional code. These patterns do not imply CVE existence or exploitability. See `tools/code_audit.py` and `tools/evaluate_rules.py`.
 
-## Cross-view consistency (`crossview`, 0.1.4)
+## Cross-view consistency (`crossview`, 0.2.0)
 
 The same fact read through two kernel interfaces must agree; a rootkit that
 hooks one of them leaves a difference that needs no signature (cross-view
@@ -64,7 +64,7 @@ reason code; `COMPLETED` cannot carry one.
 |---|---|
 | `PERMISSION_DENIED`, `TOOL_MISSING`, `TOOL_FAILED`, `TIMEOUT`, `INPUT_TRUNCATED`, `ENUMERATION_LIMIT`, `BUDGET_EXHAUSTED`, `PARSE_UNSUPPORTED`, `MALFORMED_INPUT`, `HISTORY_UNAVAILABLE`, `SYMLINK_NOT_FOLLOWED`, `ATTRIBUTION_UNAVAILABLE`, `READ_FAILED` | `OTHER_ACCOUNTS_NOT_VISIBLE`, `REQUIRES_SYSTEM_SCOPE`, `NOT_IN_PROFILE`, `SOURCE_VANISHED`, `PACKAGE_ATTESTED_NOT_PARSED`, `LIVE_ONLY_NOT_IN_OFFLINE_IMAGE` |
 
-## Offline image mode (`--root`, 0.1.4)
+## Offline image mode (`--root`, 0.2.0)
 
 `scan --root /mnt/image --target-user NAME` reads a mounted root instead of
 the live host (NIST SP 800-86: analysis of acquired media does not trust the
@@ -98,7 +98,7 @@ use `COLLECTOR_ERROR`.
 - `UNSAFE_BROWSER_LAUNCH_FLAG` separates `sandbox_reduced`, `debug_channel`
   (`pipe` or `port`), `debug_port` and `debug_port_listener`.
 
-## Shell analyser vocabularies (0.1.4)
+## Shell analyser vocabularies (0.2.0)
 
 `shell_syntax.analyze` emits only codes from two closed sets (property-tested on
 arbitrary input, `tests/test_properties.py`):
@@ -130,7 +130,7 @@ are limitations only.
 observation, benign alternatives, uncertainty, priority P1–P3 and a
 non-destructive step. A test enforces that every emitted rule has an entry.
 
-## Package databases beyond dpkg (`falsicore/packages.py`, 0.1.4)
+## Package databases beyond dpkg (`falsicore/packages.py`, 0.2.0)
 
 Pure, total, bounded helpers the collector wires in; none runs a package
 manager, follows a symlink, or touches the network (`tests/test_packages.py`,
@@ -157,7 +157,7 @@ property-tested on arbitrary bytes/text):
   `PACMAN_TRUSTALL`, `PACMAN_SIGLEVEL_OPTIONAL`, `APK_ALLOW_UNTRUSTED`);
   comments are inert; a setting the manager would reject may still be listed.
 
-The collector wires these in (0.1.4): `detect_managers` decides which
+The collector wires these in (0.2.0): `detect_managers` decides which
 databases exist; repository configuration of every manager present is read
 (`/etc/apt/*`, `/etc/yum.repos.d/*.repo`, `/etc/dnf/dnf.conf`,
 `/etc/pacman.conf`, `/etc/pacman.d/*.conf`, `/etc/apk/repositories`); in the

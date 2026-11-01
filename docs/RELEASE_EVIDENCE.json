@@ -1,94 +1,125 @@
 {
-  "schema": "falsicore.release-evidence.v3",
-  "version": "0.1.3",
-  "date_utc": "2026-10-28",
+  "schema": "falsicore.release-evidence.v4",
+  "version": "0.2.0",
+  "date_utc": "2026-11-01",
   "environment": {
     "os": "Ubuntu 24.04.4 LTS",
     "kernel": "6.8.0-147-lowlatency",
     "python": "3.12.3",
     "uid_class": "unprivileged",
-    "container": false,
-    "note": "host run on the maintainer laptop; hosted CI is recorded only after it is observed"
+    "note": "measured on the maintainer host; hosted CI is recorded only after it is observed"
   },
   "suite": {
-    "command": "python3 -m unittest discover -s tests",
-    "discovered": 548,
-    "ran": 548,
-    "passed": 548,
+    "command": "python3 -m unittest discover -s tests (FALSICORE_REQUIRE_HYPOTHESIS=1)",
+    "exit": 0,
+    "ran": 750,
     "failed": 0,
     "errors": 0,
     "skipped": 0,
-    "seconds": 4.51,
-    "test_files": 31,
-    "baseline_test_files_retained": true
+    "seconds": 57.92,
+    "test_files": 41
   },
   "coverage": {
     "scope": "falsicore/ runtime package, branch-aware, no exclusions",
-    "num_statements": 3047,
-    "covered_lines": 2775,
-    "missing_lines": 272,
-    "num_branches": 1388,
-    "covered_branches": 1192,
-    "missing_branches": 196,
-    "excluded_lines": 0,
-    "percent_display": "89",
+    "num_statements": 3991,
+    "covered_lines": 3679,
+    "missing_lines": 312,
+    "num_branches": 1846,
+    "covered_branches": 1640,
+    "missing_branches": 206,
+    "percent_display": "91",
     "ci_gate_percent": 88,
-    "target_100_reached": false
+    "target_100_reached": false,
+    "tool": "Coverage.py, version 7.13.3 with C extension"
   },
   "static_analysis": {
     "ruff": {
-      "command": ".venv/bin/ruff check --select F,E9,B,PLE falsicore tools falsicore.py",
+      "command": "python3 -m ruff check --select F,E9,B,PLE falsicore tools falsicore.py",
       "exit": 0,
-      "seconds": 0.01,
-      "version": "ruff 0.15.22",
-      "rules": "F,E9,B,PLE"
+      "seconds": 0.03,
+      "version": "ruff 0.15.22"
     },
     "bandit": {
-      "command": ".venv/bin/bandit -q -r falsicore tools falsicore.py -c pyproject.toml -f json",
+      "command": "python3 -m bandit -q -r falsicore tools falsicore.py -c pyproject.toml",
       "exit": 0,
-      "seconds": 0.73,
-      "version": "bandit 1.8.6",
-      "issues": 0,
-      "skips": [
-        "B404",
-        "B603",
-        "B108",
-        "B104"
-      ],
-      "skip_rationale": "pyproject.toml [tool.bandit]"
+      "seconds": 0.8,
+      "version": "__main__.py 1.8.6"
     },
     "mypy": {
-      "command": ".venv/bin/mypy --ignore-missing-imports falsicore",
-      "exit": 1,
-      "seconds": 0.46,
+      "command": "python3 -m mypy",
+      "exit": 0,
+      "seconds": 0.11,
       "version": "mypy 1.18.2 (compiled: yes)",
-      "errors_reported": 10,
-      "gate": "informational, not a release gate"
+      "gate": "release gate: zero errors"
     },
     "internal_ast_audit": {
       "command": "python3 tools/code_audit.py . --fail-on high",
       "exit": 0,
-      "seconds": 0.82,
-      "medium_findings": 6,
-      "high_findings": 0,
-      "note": "supplementary; the single MEDIUM is the deliberate UI-callback isolation"
+      "seconds": 1.08
     },
     "synthetic_rule_fixtures": {
       "command": "python3 -m tools.evaluate_rules",
       "exit": 0,
       "seconds": 0.04
+    },
+    "detection_validity": {
+      "command": "python3 tools/validity.py --check",
+      "exit": 0,
+      "seconds": 30.63
     }
   },
-  "fault_injection": {
-    "mutants": 25,
-    "killed": 25,
-    "survived": [],
-    "scope": "targeted at changed protections; not whole-project mutation testing"
+  "detection_validity": {
+    "scenarios": {
+      "benign": 27,
+      "known_gap": 2,
+      "positive": 57
+    },
+    "passes": true,
+    "clean_hosts": [
+      {
+        "scope": "user",
+        "mode": "live",
+        "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED"
+      },
+      {
+        "scope": "system",
+        "mode": "live",
+        "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED"
+      },
+      {
+        "scope": "user",
+        "mode": "offline",
+        "outcome": "NO_COMPROMISE_INDICATORS_OBSERVED"
+      }
+    ],
+    "rules_without_positive_scenario": [],
+    "measures": "recall on synthetic artifact shapes; false alarms on benign twins; unplanted-host verdict",
+    "does_not_measure": "sensitivity to real malware; shapes not listed; the live host"
+  },
+  "mutation_testing": {
+    "tool": "tools/mutate.py (per-test selection from coverage contexts)",
+    "pull_request_gate": "mutants on changed runtime lines must all be killed (CI job mutation-diff)",
+    "external_baseline_0_1_3": {
+      "commit": "81b5345",
+      "mutants": 14675,
+      "killed": 8236,
+      "survived": 6390,
+      "operators": "mutmut 3.3.1 libcst + return->None, negation, call deletion",
+      "note": "strings and default-argument removals dominate the survivors"
+    },
+    "detectors_py_in_repo": {
+      "mutants": 307,
+      "open_after_review": 0,
+      "annotated_equivalents": 2,
+      "dead_parameters_removed": 1
+    },
+    "whole_package_table": "weekly workflow mutation.yml (artifact), see docs/MUTATION.md"
   },
   "not_performed": [
-    "system-scope (root) scan",
+    "system-scope (root) scan on the maintainer host",
     "malware-corpus validation",
     "cross-platform build reproducibility",
-    "independent third-party review"
+    "independent third-party review",
+    "scan of a real offline image (fixture images only)"
   ]
 }

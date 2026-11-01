@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.2.0 — 2026-11-01
+
+Universal, measured, refutable. Every item below is bound to a test, a
+harness table or an audit row (`docs/AUDIT.md`, `docs/DETECTION_VALIDITY.json`,
+`docs/MUTATION.md`).
+
+- **Detection validity (claim C8).** `tools/validity.py` plants one artifact
+  shape per scenario on a hermetic fixture host and requires the rule to fire
+  and its benign twin to stay silent; 96 scenarios, 3 clean hosts (user,
+  system, offline) at `NO_COMPROMISE_INDICATORS_OBSERVED`; the table is
+  committed and CI fails when it is stale. Recall on synthetic shapes, not
+  sensitivity to malware.
+- **Property-based testing.** Universally quantified claims for the shell
+  analyser, finding identity, digests, adapters and bounded reads
+  (Hypothesis, CI only). Stating them refuted seven behaviours (P-1…P-9);
+  all fixed, counterexamples kept as plain tests.
+- **Mutation testing (claim C9).** `tools/mutate.py` (stdlib) with per-test
+  selection from coverage contexts; CI gate on changed lines; weekly
+  whole-package table. External 0.1.3 baseline 56 % killed recorded;
+  `detectors.py` now 0 open items.
+- **Cross-view consistency** (`crossview`, essential): hidden processes
+  (PID sweep vs `/proc`, confirming pass, `Tgid`), hidden modules (sysfs vs
+  `/proc/modules`), hidden listeners (`/proc/net` vs netlink, two snapshots),
+  mounts over `/proc/<pid>`.
+- **Universal package managers.** dpkg, rpm (`rpm -Va`), pacman (mtree
+  sha256) and apk (sha1) integrity within fixed bounds; repository trust
+  settings for apt, dnf/yum, pacman, apk; rules renamed `PACKAGE_*`,
+  `INSECURE_PACKAGE_SOURCE_SETTING`; new `PACKAGE_METADATA_DRIFT`.
+- **Offline image mode** (`scan --root`): live-only checks declared, never
+  inferred; users from the image's `/etc/passwd`; crontab spool; image
+  journal via `journalctl --directory`; `summary.mode` in the report identity.
+- **auth without journald:** `/var/log/auth.log`, `secure`, `messages`.
+- **Hard whole-scan deadline (A-8 fixed):** `SIGALRM` after budget + grace
+  interrupts a blocked collector; probe cleanup runs with the alarm deferred.
+- **Shell analyser:** code from substitutions (`eval "$(curl …)"`, `sh -c "$(…)"`)
+  attributed to its source; `/dev/tcp` reverse shells (`NETWORK_REDIRECTION`);
+  NUL bytes cannot forge markers; `/tmp/done` no longer escapes as a keyword.
+- **No site special-cased:** extension assessment reports `host_scope` and
+  `content_script_scope` from the match-pattern grammar.
+- **Injectable scan root** for all system paths; `mypy` zero-error gate;
+  typed profiles; local `tools/gate.py` mirroring CI; verified bibliography
+  (`docs/BIBLIOGRAPHY.md`).
+- Report schema `falsicore.summary.v5`; v4 reports read as LEGACY.
+
 ## 0.1.3 — 2026-10-28
 
 Repair release driven by three separate review passes; register and evidence

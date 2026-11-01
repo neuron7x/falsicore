@@ -1766,5 +1766,5 @@
     }
   ],
   "schema": "falsicore.detection-validity.v1",
-  "tool_version": "0.1.3"
+  "tool_version": "0.2.0"
 }

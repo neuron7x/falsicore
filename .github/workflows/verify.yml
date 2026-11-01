@@ -44,6 +44,8 @@ jobs:
         run: python -m tools.evaluate_rules
       - name: Detection validity (planted artifacts vs benign twins; committed table current)
         run: python tools/validity.py --check
+      - name: Release evidence names this version and a green suite
+        run: python tools/release_evidence.py --check
       - name: Reproducible builds and packaged self-test
         if: matrix.python-version == '3.13'
         shell: bash

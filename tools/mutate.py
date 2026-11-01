@@ -31,7 +31,6 @@ import ast
 import copy
 import json
 import os
-import queue
 import re
 import shutil
 import subprocess
@@ -312,6 +311,8 @@ def run_mutant(mutant: Mutant, tests: set[str] | None, workdir: Path, python: st
         return mutant
     target = workdir / "falsicore" / f"{mutant.module}.py"
     original = target.read_text()
+    manifest_path = workdir / "SOURCE_MANIFEST.sha256"
+    original_manifest = manifest_path.read_bytes() if manifest_path.is_file() else None
     try:
         target.write_text(mutant.detail + "\n")
         mutant.detail = ""
@@ -342,13 +343,17 @@ def run_mutant(mutant: Mutant, tests: set[str] | None, workdir: Path, python: st
         mutant.status, mutant.detail = "ERROR", type(exc).__name__
     finally:
         try:
+            # The test may leave generated output in the disposable checkout.
+            # Regenerating a manifest here can fail on that output and erase a
+            # legitimate KILLED/SURVIVED result; restore the exact baseline bytes.
             target.write_text(original)
-            restore = subprocess.run(
-                [python, "-B", "tools/build_release.py", "--write-manifest"],
-                cwd=str(workdir), capture_output=True, timeout=120)
-            if restore.returncode != 0:
-                mutant.status, mutant.detail = "ERROR", "manifest restoration failed"
-        except (OSError, subprocess.TimeoutExpired):
+            if manifest_path.is_symlink():
+                raise OSError("manifest replaced by symlink")
+            if original_manifest is None:
+                manifest_path.unlink(missing_ok=True)
+            else:
+                manifest_path.write_bytes(original_manifest)
+        except OSError:
             mutant.status, mutant.detail = "ERROR", "tree restoration failed"
     mutant.seconds = round(time.monotonic() - started, 2)
     return mutant
@@ -395,24 +400,26 @@ def run(modules: dict[str, set[int] | None], workers: int, timeout: float, pytho
         mutants.extend(generated)
         selection[module] = covering_tests(coverage_json, module)
     with tempfile.TemporaryDirectory(prefix="falsicore-mutants-") as tmp:
-        trees = [Path(tmp) / f"w{i}" for i in range(max(1, workers))]
-        for tree in trees:
-            _fresh_tree(tree)
-        free: queue.Queue[Path] = queue.Queue()
-        for tree in trees:
-            free.put(tree)
-
         def work(mutant: Mutant) -> Mutant:
             if budget is not None and time.monotonic() - started > budget:
                 mutant.status, mutant.detail = "NOT_RUN", "budget"
                 return mutant
             tests = select_tests(selection[mutant.module], mutant)
-            tree = free.get()           # a tree is held by exactly one running mutant
+            if tests is not None and not tests:
+                mutant.status, mutant.detail = "NO_TESTS", ""
+                return mutant
+            # Never reuse a checkout across mutants. A failing/timeout test can
+            # leave files or spawned work behind; pooled worktrees contaminated
+            # later mutants and caused thousands of spurious manifest errors.
             try:
-                return run_mutant(mutant, tests, tree, python, timeout)
-            finally:
-                free.put(tree)
-        with ThreadPoolExecutor(max_workers=len(trees)) as pool:
+                with tempfile.TemporaryDirectory(prefix="case-", dir=tmp) as case:
+                    tree = Path(case) / "checkout"
+                    _fresh_tree(tree)
+                    return run_mutant(mutant, tests, tree, python, timeout)
+            except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+                mutant.status, mutant.detail = "ERROR", f"isolated checkout: {type(exc).__name__}"
+                return mutant
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
             results = list(pool.map(work, mutants))
     counts: dict[str, int] = {}
     for m in results:

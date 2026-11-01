@@ -249,7 +249,7 @@ class FailClosedMutationExecution(unittest.TestCase):
             self.assertEqual(result.status, "ERROR")
             self.assertEqual(result.detail, "RuntimeError")
             self.assertEqual(target.read_text(), "VALUE = 1")
-            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_count, 1)
 
     def test_timeout_is_never_a_success_even_in_measurement_mode(self):
         row = {"module": "detectors", "line": 1, "operator": "compare",
@@ -264,6 +264,74 @@ class FailClosedMutationExecution(unittest.TestCase):
                 "--module", "detectors", "--allow-survivors"]), 1)
         self.assertIn(("compare", "x", "y"),
                       mutate.open_signatures(report)["detectors"])
+
+
+    def test_generated_output_does_not_downgrade_kill_to_restoration_error(self):
+        """Negative control: a child writes a release-disallowed file before failing."""
+        mutant = mutate.Mutant("detectors", 1, "int:shift", "VALUE = 1",
+                               "0", "detectors:1:1", detail="VALUE = 0")
+        with tempfile.TemporaryDirectory() as td:
+            workdir = Path(td)
+            target = workdir / "falsicore/detectors.py"
+            target.parent.mkdir()
+            target.write_text("VALUE = 1\n")
+            manifest = workdir / "SOURCE_MANIFEST.sha256"
+            manifest.write_bytes(b"baseline manifest\n")
+            calls = []
+
+            def command(argv, **kwargs):
+                calls.append(argv)
+                if "--write-manifest" in argv:
+                    # The real packager would reject the unexpected file.
+                    if (workdir / "unexpected-test-output.json").exists():
+                        return SimpleNamespace(returncode=1)
+                    manifest.write_bytes(b"mutated manifest\n")
+                    return SimpleNamespace(returncode=0)
+                (workdir / "unexpected-test-output.json").write_text("test residue")
+                return SimpleNamespace(returncode=1, stderr="FAIL: injected_negative_control")
+
+            with patch.object(mutate.subprocess, "run", side_effect=command):
+                result = mutate.run_mutant(mutant, {"test_x.Case.test_fail"},
+                                           workdir, sys.executable, timeout=2)
+            self.assertEqual(result.status, "KILLED", result.detail)
+            self.assertEqual(target.read_text(), "VALUE = 1\n")
+            self.assertEqual(manifest.read_bytes(), b"baseline manifest\n")
+            self.assertEqual(len(calls), 2)
+
+    def test_two_mutants_start_from_independent_pristine_checkouts(self):
+        """Red control: the former pooled worktree passed residue to mutant #2."""
+        with tempfile.TemporaryDirectory() as td:
+            pkg = Path(td) / "falsicore"
+            pkg.mkdir()
+            (pkg / "fixture.py").write_text("VALUE = 1\n")
+            mutants = [mutate.Mutant("fixture", 1, "int:shift", "VALUE = 1", "0",
+                                     f"fixture:1:{i}", detail="VALUE = 0")
+                       for i in (1, 2)]
+            worktrees = []
+
+            def fresh_tree(destination):
+                destination.mkdir()
+                (destination / "baseline.txt").write_text("pristine")
+
+            def execute(mutant, selected, destination, python, timeout):
+                self.assertTrue((destination / "baseline.txt").exists())
+                self.assertFalse((destination / "test-generated.json").exists(),
+                                 "a previous mutant contaminated this checkout")
+                worktrees.append(destination)
+                (destination / "test-generated.json").write_text("left by a test")
+                mutant.status = "KILLED"
+                return mutant
+
+            with patch.object(mutate, "PACKAGE", pkg), \
+                 patch.object(mutate, "generate", return_value=mutants), \
+                 patch.object(mutate, "covering_tests", return_value=None), \
+                 patch.object(mutate, "_fresh_tree", side_effect=fresh_tree), \
+                 patch.object(mutate, "run_mutant", side_effect=execute):
+                report = mutate.run({"fixture": None}, workers=1, timeout=1,
+                                    python=sys.executable,
+                                    coverage_json=Path(td) / "missing.json", budget=None)
+            self.assertEqual(report["counts"], {"KILLED": 2})
+            self.assertEqual(len(set(worktrees)), 2)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ import threading
 import time
 from collections import Counter
 from zlib import error as zlib_error
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, Callable, Iterable
 
@@ -95,7 +95,18 @@ SCOPE_LIMIT_CODES = {
     "SOURCE_VANISHED": "the object disappeared between enumeration and reading",
     "PACKAGE_ATTESTED_NOT_PARSED": "root-owned file identical to its dpkg record; unsupported syntax not analysed, package trust assumed",
     "LIVE_ONLY_NOT_IN_OFFLINE_IMAGE": "this part reads the running kernel or runs a probe; an offline image has neither",
+    "EVAL_OF_ATTESTED_PROGRAM_OUTPUT": "a start-up file executes the output of a package-attested program; that output "
+                                       "is not analysed, the program's package is trusted (its inputs are not)",
 }
+# Programs whose output is their input: evaluating it is evaluating unknown data,
+# so attestation of the program itself proves nothing about the code.
+RELAY_PROGRAMS = frozenset({
+    "cat", "echo", "printf", "head", "tail", "sed", "awk", "gawk", "mawk", "tr", "cut", "tee", "xargs", "env",
+    "sh", "bash", "dash", "zsh", "python", "python3", "perl", "ruby", "node", "base64", "xxd", "od", "rev",
+    "sort", "uniq", "grep", "egrep", "fgrep", "find", "curl", "wget", "nc", "ncat", "socat", "ssh", "sudo", "doas",
+    "zcat", "gunzip", "bzcat", "xzcat", "openssl", "gpg", "eval", "exec", "command", "source", ".",
+})
+PROGRAM_DIRS = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 LIVE_ONLY_COLLECTORS = ("processes", "network", "kernel", "crossview")
 # Probes that may run against an offline image: journalctl reading the image's own journal directory.
 OFFLINE_ALLOWED_TOOLS = ("journalctl",)
@@ -1131,16 +1142,57 @@ class Audit:
         recorded = self._recorded_digest(path)
         return recorded is not None and self._digest_matches(content, *recorded)
 
+    def _attested_program(self, name: str) -> Path | None:
+        """The packaged executable `name` resolves to, if its content matches the package record.
+
+        Relative names are looked up in the fixed system directories only (never
+        $PATH, never /usr/local); relay programs (cat, sed, sh, …) never qualify,
+        because their output is their input.
+        """
+        base = PurePosixPath(name).name
+        if not base or base in RELAY_PROGRAMS or base in {"[", "test", "true", "false"}:
+            return None
+        candidates = [self.sys(name)] if name.startswith("/") else [self.sys(d) / base for d in PROGRAM_DIRS]
+        for path in candidates:
+            if not path.is_file() or path.is_symlink():
+                continue
+            content, _ = safe_read(path, 8 * 1024 * 1024)
+            if content is not None and self.package_attested(path, content):
+                return path
+            return None
+        return None
+
+    def _shell_limit(self, analysis: dict, path: Path | str, content: bytes | None, gaps: Gaps) -> None:
+        """Turn analyser limitations into the right coverage code.
+
+        A file whose only unresolved sites are `eval "$(prog …)"` with every
+        `prog` package-attested is a stated trust assumption (scope limit), not
+        an incomplete inspection: this is what a stock shell start-up looks like
+        (`dircolors`, `lesspipe`, prompt and shell hooks). Anything else stays
+        PARSE_UNSUPPORTED.
+        """
+        limitations = analysis["limitations"]
+        if not limitations:
+            return
+        if isinstance(path, Path) and content is not None and self.package_attested(path, content):
+            gaps.add("PACKAGE_ATTESTED_NOT_PARSED")
+            return
+        programs = analysis.get("evaluated_programs", [])
+        if (limitations == ["EXPANSION_NOT_RESOLVED"] and programs
+                and analysis.get("unresolved_expansions") == len(programs)
+                and all(self._attested_program(p) is not None for p in programs)):
+            gaps.add("EVAL_OF_ATTESTED_PROGRAM_OUTPUT")
+            self.stats.setdefault("evaluated_attested_programs", []).append({
+                "source_ref": self.source(path), "programs": sorted(set(programs))})
+            return
+        gaps.add("PARSE_UNSUPPORTED")
+        self.stats.setdefault("shell_analysis_limits", []).append({
+            "source_ref": self.source(path), "limitations": limitations})
+
     def _command_text_review(self, text: str, path: Path, content: bytes, gaps: Gaps) -> list[str]:
         """Static shell analysis of scheduler/autostart command text with explicit limits."""
         analysis = analyze_shell(text)
-        if analysis["limitations"]:
-            if self.package_attested(path, content):
-                gaps.add("PACKAGE_ATTESTED_NOT_PARSED")
-            else:
-                gaps.add("PARSE_UNSUPPORTED")
-                self.stats.setdefault("shell_analysis_limits", []).append({
-                    "source_ref": self.source(path), "limitations": analysis["limitations"]})
+        self._shell_limit(analysis, path, content, gaps)
         return analysis["patterns"]
 
     def _resolve_sourced(self, target: str) -> Path | None:
@@ -1255,10 +1307,7 @@ class Audit:
             self.baseline["cron_entry_hashes"].extend(d.digest(line) for line in cron.splitlines() if line.strip() and not line.lstrip().startswith("#"))
             analysis = analyze_shell(cron_commands(cron))
             flags = analysis["patterns"]
-            if analysis["limitations"]:
-                gaps.add("PARSE_UNSUPPORTED")
-                self.stats.setdefault("shell_analysis_limits", []).append({
-                    "source_ref": self.source("crontab://target-user"), "limitations": analysis["limitations"]})
+            self._shell_limit(analysis, "crontab://target-user", None, gaps)
             if flags:
                 self.finding("SUSPICIOUS_USER_CRONTAB", "high", "User cron includes command execution concerns", "crontab://target-user", {"patterns": flags}, attack="T1053.003")
         for p in (self.home / ".ssh/authorized_keys", self.home / ".ssh/authorized_keys2"):
@@ -1309,10 +1358,7 @@ class Audit:
                         elif content is None and rst != "ABSENT":
                             self.read_gap(resolved, rst, gaps)
                 rules = analysis["patterns"]
-                if analysis["limitations"]:
-                    gaps.add("PARSE_UNSUPPORTED")
-                    self.stats.setdefault("shell_analysis_limits", []).append({
-                        "source_ref": self.source(p), "limitations": analysis["limitations"]})
+                self._shell_limit(analysis, p, None, gaps)   # start-up files are the user's: never package-attested here
                 if rules:
                     self.finding("SUSPICIOUS_SHELL_INIT", "medium", "Shell initialization contains literal risky command syntax; not proof of execution", p,
                                  {"patterns": rules, "file_name": p.name, "locations": analysis["matches"],

@@ -474,6 +474,14 @@ class _Analysis:
         self.sourced: list[str] = []
         self.emits: set[str] = set()   # source classes of commands (for substitutions)
         self._sub_emits: set[str] = set()  # source classes of the current command's own $(...)
+        self.evaluated_programs: list[str] = []   # literal heads of $(...) whose output is executed as code
+        self.literal_heads: list[str] = []         # literal program words of this run's simple commands
+        self.unresolved = 0                        # sites that produced EXPANSION_NOT_RESOLVED
+        self._sub_heads: list[str] = []            # literal heads of the current command's own $(...)
+
+    def unresolved_site(self) -> None:
+        self.gaps.add("EXPANSION_NOT_RESOLVED")
+        self.unresolved += 1
 
     def found(self, rules: set[str], line: int) -> None:
         if rules:
@@ -484,13 +492,15 @@ class _Analysis:
         sub = _run(text, self.depth + 1)
         self.gaps.update(sub.gaps)
         self.found(sub.patterns, line)
+        self.evaluated_programs.extend(sub.evaluated_programs)
+        self.unresolved += sub.unresolved
         return sub
 
     def value(self, name: str, value: str, word: Word) -> None:
         """Assignments whose value is later executed as a command."""
         if name in ("PROMPT_COMMAND", "BASH_ENV", "ENV"):
             if word.expands:
-                self.gaps.add("EXPANSION_NOT_RESOLVED")
+                self.unresolved_site()
             if name == "PROMPT_COMMAND":
                 # The value is executed at every prompt: code that arrives in it
                 # from a download or a decode is code from that source.
@@ -502,12 +512,15 @@ class _Analysis:
     def command(self, cmd: Command) -> tuple[str, bool]:
         """Analyse one simple command; return (output source class, reads code from stdin)."""
         sub_emits: set[str] = set()
+        sub_heads: list[str] = []
         for w in cmd.words:
             for body in w.subs:
                 sub = self.nested(body, w.line)
                 sub_emits.update(sub.emits)
+                sub_heads.extend(sub.literal_heads)
         self.emits.update(sub_emits)
         self._sub_emits = sub_emits
+        self._sub_heads = sub_heads
         # A redirection to /dev/tcp or /dev/udp opens a socket from the shell
         # itself (reverse-shell idiom: `bash -i >& /dev/tcp/H/P 0>&1`,
         # `exec 3<>/dev/tcp/H/P`). Checked before wrappers are stripped, since
@@ -533,8 +546,9 @@ class _Analysis:
             return "", False
         if first.expands:
             # The program that runs is not known statically.
-            self.gaps.add("EXPANSION_NOT_RESOLVED")
+            self.unresolved_site()
             return "", False
+        self.literal_heads.append(first.text)
         if _temporary(first.text):
             self.found({"TEMP_PATH_IN_EXECUTION"}, line)
         if name in DATA_BUILTINS:
@@ -554,7 +568,7 @@ class _Analysis:
             rest = [w for w in args if not w.text.startswith("-")]
             if rest:
                 if rest[0].expands:
-                    self.gaps.add("EXPANSION_NOT_RESOLVED")
+                    self.unresolved_site()
                 self.nested(rest[0].text, rest[0].line)
             return "", False
         if name in (".", "source"):
@@ -572,7 +586,11 @@ class _Analysis:
             return "", False
         if name == "eval":
             if any(w.expands for w in args):
-                self.gaps.add("EXPANSION_NOT_RESOLVED")
+                self.unresolved_site()
+                # eval "$(prog args)": the code is prog's output. The caller may
+                # decide what it trusts about prog; here it is only recorded.
+                if sub_heads and not sub_emits:
+                    self.evaluated_programs.extend(sub_heads)
             # eval "$(curl ...)": the evaluated string is the download itself.
             self._code_from(sub_emits, line)
             self.nested(" ".join(w.text for w in args), line)
@@ -621,7 +639,7 @@ class _Analysis:
         elif _temporary(script.text):
             self.found({"TEMP_PATH_IN_EXECUTION"}, line)
         elif script.expands:
-            self.gaps.add("EXPANSION_NOT_RESOLVED")
+            self.unresolved_site()
         return False
 
     def _stdin_code(self, cmd: Command, line: int) -> None:
@@ -631,7 +649,7 @@ class _Analysis:
                 if _temporary(target.text):
                     self.found({"TEMP_PATH_IN_EXECUTION"}, line)
                 elif target.expands:
-                    self.gaps.add("EXPANSION_NOT_RESOLVED")
+                    self.unresolved_site()
             elif op == "<<<" and isinstance(target, Word):
                 self.nested(target.text, line)
         for doc in cmd.heredocs:
@@ -649,7 +667,7 @@ class _Analysis:
                 self.gaps.add("MISSING_SHELL_COMMAND_OPERAND")
                 return "", False
             if rest[0].expands:
-                self.gaps.add("EXPANSION_NOT_RESOLVED")
+                self.unresolved_site()
                 self._code_from(self._sub_emits, line)  # sh -c "$(curl ...)"
             self.nested(rest[0].text, line)
             return "", False
@@ -703,4 +721,6 @@ def analyze(text: str, depth: int = 0) -> dict:
     return {"patterns": sorted(result.patterns),
             "matches": [{"line": line, "patterns": sorted(rules)} for line, rules in sorted(result.matches.items())],
             "limitations": sorted(result.gaps),
-            "sourced": result.sourced}
+            "sourced": result.sourced,
+            "evaluated_programs": result.evaluated_programs,
+            "unresolved_expansions": result.unresolved}

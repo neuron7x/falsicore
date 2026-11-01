@@ -72,6 +72,9 @@ alias grep='grep --color=auto'
 if [ -f ~/.bash_aliases ]; then
     . ~/.bash_aliases
 fi
+# stock Ubuntu lines: the output of two packaged programs is evaluated as code
+test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"
+[ -x /usr/bin/lesspipe ] && eval "$(SHELL=/bin/sh lesspipe)"
 """
 MANIFEST_BENIGN = {"manifest_version": 3, "name": "Notes", "version": "1.2.0", "permissions": ["storage"]}
 MANIFEST_POWERFUL = {"manifest_version": 3, "name": "Helper", "version": "4.0.1",
@@ -89,6 +92,7 @@ class FixtureHost:
         self.outputs: dict[str, dict] = {}
         self.commands_seen: list[tuple[str, list[str]]] = []
         self.hidden_pids: set[int] = set()        # known to the kernel oracle, absent from /proc
+        self.attested: set[Path] = set()           # files the package database vouches for (root-owned on a real host)
         self.lookup_only: dict[int, int] = {}      # pid -> Tgid answered by a direct lookup although unlisted
         self.ss_listeners: list[str] = []
         self.procnet_rows: dict[str, list[tuple[str, int]]] = {"tcp": [("0100007F", 631)], "udp": [("3600007F", 53)],
@@ -218,6 +222,8 @@ class FixtureHost:
                   "[Desktop Entry]\nType=Application\nName=AT-SPI D-Bus Bus\nExec=/usr/libexec/at-spi-bus-launcher --launch-immediately\n")
         self.file("/etc/apt/sources.list", "deb http://archive.ubuntu.com/ubuntu noble main restricted\n")
         self.file("/var/lib/dpkg/status", "Package: bash\nStatus: install ok installed\nVersion: 5.2\n\n")
+        for program in ("dircolors", "lesspipe"):
+            self.attested.add(self.file(f"/usr/bin/{program}", "#!/bin/sh\n", 0o755))
         self.home_file(".bashrc", BASHRC_CLEAN)
         self.home_file(".profile", 'if [ -n "$BASH_VERSION" ]; then\n    if [ -f "$HOME/.bashrc" ]; then\n'
                        '        . "$HOME/.bashrc"\n    fi\nfi\n')
@@ -456,6 +462,20 @@ def _(h: FixtureHost) -> None:
 @scenario("bashrc_stock_ubuntu_wrappers", "benign", "SUSPICIOUS_SHELL_INIT")
 def _(h: FixtureHost) -> None:
     h.home_file(".bashrc", BASHRC_CLEAN + 'export CACHE_DIR=/tmp/cache\n[ -x /usr/bin/lesspipe ] && eval "$(SHELL=/bin/sh lesspipe)"\n')
+
+
+@scenario("bashrc_eval_of_unattested_program", "benign", "SUSPICIOUS_SHELL_INIT",
+          notes="not a finding, but the file stays PARTIAL/PARSE_UNSUPPORTED: starship is not package-attested here")
+def _(h: FixtureHost) -> None:
+    h.file("/usr/local/bin/starship", "#!/bin/sh\n", 0o755)
+    h.home_file(".bashrc", BASHRC_CLEAN + 'eval "$(starship init bash)"\n')
+
+
+@scenario("bashrc_eval_of_relay_program_output", "benign", "SUSPICIOUS_SHELL_INIT",
+          notes="cat relays its input: attestation of cat proves nothing, the file stays PARTIAL")
+def _(h: FixtureHost) -> None:
+    h.attested.add(h.file("/usr/bin/cat", "#!/bin/sh\n", 0o755))
+    h.home_file(".bashrc", BASHRC_CLEAN + 'eval "$(cat ~/.hook)"\n')
 
 
 @scenario("bashrc_download_only_in_comment", "benign", "SUSPICIOUS_SHELL_INIT")
@@ -835,6 +855,8 @@ def make_audit(host: FixtureHost) -> Audit:
         audit = Audit(host.scope, target_user=USER, profile=host.profile, root=host.root, offline=host.offline)
     audit.command = host.fake_command  # type: ignore[method-assign]
     audit.pid_probe = host.pid_probe
+    # Package attestation needs root ownership on a real host; the fixture names the attested files instead.
+    audit.package_attested = lambda path, content: path in host.attested  # type: ignore[method-assign]
     if host.lookup_only:
         original_lookup = audit._tgid_of
         audit._tgid_of = lambda pid: host.lookup_only[pid] if pid in host.lookup_only else original_lookup(pid)  # type: ignore[method-assign]

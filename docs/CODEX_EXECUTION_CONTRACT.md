@@ -9,7 +9,7 @@
 
 ## 0. User mandate, scope and success predicate
 
-The owner delegates full end-to-end engineering, local testing, review, fixes, source-control commits, CI evidence, field-validation coordination, release readiness, and **conditional merge of PR #19** to the incoming local Codex agent. The older instruction "owner alone may merge" is superseded for that agent by this subsequent explicit delegation. The **MERGE HOLD** remains in force until the objective preflight below actually passes. Never merge merely because the agent was delegated authority. Never bypass protection or invent authority unavailable to GitHub credentials.
+The owner delegates end-to-end engineering, local tests, review, fixes, source-control commits to the PR branch, CI evidence, field-validation coordination and release-readiness preparation to the incoming local Codex agent. **The latest PR-specific instruction reserves all merge decisions and execution to the owner alone**, superseding the earlier conditional-merge language. **Never merge, enable auto-merge, bypass protection or push to `main`**. The **MERGE HOLD** remains in force until the owner explicitly decides otherwise; even a verified preflight does not automatically authorize a merge.
 
 FALSICORE is a **research/operations instrument**, not a SaaS, storefront or product to monetize. The intended capability is an offline-first, read-only Linux endpoint/forensic-image intrusion triage system with falsifiable detection claims, bounded resource usage, safe evidence handling and reproducible releases. Avoid unrelated features, frameworks, redesigns or marketing. Optimize correctness, coverage, performance and observability of existing contracts before expansion.
 
@@ -66,7 +66,7 @@ The agent may inspect or improve documentation and detection methods as needed, 
 | W6: governance & provenance | G6; FC-28, FC-37, FC-39 | Verified branch protection and required evidence check, signed source/build provenance, SBOM, actual verification commands and confidential disclosure configuration. |
 | W7: field validity and environments | G7/G8; FC-31–36 | Representative held-out labeled corpora, false-alarm/precision/recall and latency statistics, disposable privileged host, provenance-verified offline image, cross-platform reproduction and genuinely independent challenge. |
 | W8: operational optimization | cross-cutting | Frozen workload mix, correct metrics, p50/p95/p99 latency, peak RSS/CPU, resource ceilings, error rates, determinism, privacy and user runbooks; prove performance without losing detection or weakening safeguards. |
-| W9: integration & release | G0–G8 | Exact-HEAD final acceptance, complete per-FC ledger, security-review closure, conditional merge under branch protection, then verify protected `main` and post-merge signed release artifacts. |
+| W9: integration & owner handoff | G0–G8 | Exact-HEAD final acceptance, complete per-FC ledger, security-review closure, independently checked merge recommendation for owner decision only; no automated merge. Post-merge signed release artifacts are separate owner-authorized work. |
 
 ### Canonical FC index (generated from the original 39-task register)
 
@@ -211,7 +211,7 @@ For each workload record OS/kernel, CPU, cores, RAM, filesystem class, Python ve
 
 ## 10. Pre-merge decision and logically post-merge release evidence
 
-**Current owner delegation permits Codex to merge PR #19 only after an objectively reviewable preflight**; older "owner-only" text in historical PR comments remains a timestamped record, not the latest authorization. No automatic immediate merge, `--admin` bypass, force push, disabling required checks, tag rewrite or merge of other PRs.
+**Codex has NO permission to merge PR #19. Owner alone decides and executes merge**, even after an objectively reviewable preflight; this is the latest PR-specific restriction and supersedes the earlier conditional-merge delegation. No merge, auto-merge, `--admin` bypass, force push, disabling required checks, tag rewrite or merge of other PRs.
 
 Required pre-merge proof:
 
@@ -223,7 +223,7 @@ Required pre-merge proof:
 6. Source/artefact digest agreement, reproducible candidate build, pinned dev dependencies, SPDX SBOM validated, **signed candidate build attestation** verified with a trusted identity and exact subject and commit, operational installation/rollback guide reviewed.
 7. Release-only facts that logically require post-merge `main` (new tag target and public release assets) have a rehearsed, fail-closed post-merge procedure. These remain `PENDING_POST_MERGE`, **not PASS**, until executed; there is no claim of release readiness before the signed release is verified. If the original assurance contract explicitly requires the published release *before code integration*, record that circular dependency as a blocker rather than claiming it solved.
 
-If all admissible pre-merge conditions hold, issue the actual normal PR merge using authenticated GitHub CLI/API **without bypassing branch policy**, retaining provenance and preserving the historical audit. Afterward, verify `main` HEAD, required CI and ancestry. Select a **new** compatible version/tag (never rewrite historical `v0.2.0`) if release policy permits; publish only from protected `main` after verified tag signing and exact-current-main checks; run consumer-side `gh attestation verify` against actual uploaded ZIP/pyz, validate SBOM and source digests. Only then convert post-merge release prerequisites to `PASS` and make an appropriately scoped operational release claim. If any step fails, stop, document and remediate; no fabricated rollback and no claim that a partially published release is valid.
+If all admissible pre-merge conditions hold, prepare a source-bound `READY_FOR_OWNER_REVIEW` report with exact SHA, check runs, mutation ledger, G0–G8 state, unresolved external evidence and a non-destructive merge/release runbook. **Stop without merging: the owner alone makes the merge decision.** Owner-authorized post-merge work, if separately requested later, must verify protected `main` HEAD, required CI and ancestry, choose a new signed version/tag rather than rewrite historical `v0.2.0`, validate any published SBOM and attestation with consumer-side `gh attestation verify`, and verify release asset digests. Pre-merge receipt cannot assert that these post-merge operations occurred. If a gate fails, stop and document; no fabricated rollback or release-readiness claim.
 
 ## 11. Current recorded blockers at handoff (stale once new HEAD is observed)
 
@@ -253,4 +253,4 @@ Do not claim NIST/SLSA/OpenSSF or US-industry certification. Use their *specific
 
 ## 13. Required final output (only after genuine closure)
 
-Produce a compact integrated evidence summary and linked artifact index: final PR merge commit SHA, code/test/manifest hashes, 39-item closure ledger, G0–G8 result matrix, all required green checks at exact source commit, survivors resolved, representative-host/field and independent challenge result with limitations, benchmark delta, archive reproducibility, signer-validated SBOM/attestation, and post-merge release version. If something is still missing, say **NOT READY** and enumerate the smallest missing evidence. The owner requested completion, not a theatrical statement of completion.
+Produce a compact integrated evidence summary and linked artifact index: exact final **PR head SHA** (never a fabricated merge commit), code/test/manifest hashes, 39-item closure ledger, G0–G8 result matrix, all required green checks on that source, mutation survivors, representative-host/field and independent challenge results and limitations, benchmark delta, archive reproducibility, and any verified signer/SBOM/attestation evidence. Record `PENDING_POST_MERGE` where relevant. Recommend `READY_FOR_OWNER_REVIEW` only if proven; otherwise say **NOT READY** with exact blockers. **Do not merge.**

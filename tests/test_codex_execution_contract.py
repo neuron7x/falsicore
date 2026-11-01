@@ -42,7 +42,10 @@ class CodexHandoffContract(unittest.TestCase):
     def test_no_immediate_merge_or_fabricated_certification(self):
         root = AGENTS.read_text(encoding="utf-8")
         instructions = CONTRACT.read_text(encoding="utf-8")
-        self.assertIn("conditional merge", root.lower())
+        self.assertIn("owner alone", root.lower())
+        self.assertIn("Never merge", root)
+        self.assertIn("owner alone", instructions.lower())
+        self.assertIn("Codex has NO permission to merge", instructions)
         self.assertIn("MERGE HOLD", root)
         self.assertIn("PENDING_POST_MERGE", root)
         self.assertIn("PENDING_POST_MERGE", instructions)

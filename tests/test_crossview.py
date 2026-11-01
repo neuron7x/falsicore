@@ -161,11 +161,22 @@ class CrossViewFixture(unittest.TestCase):
         self.assertEqual(finding["evidence"], {"proto": "tcp", "port": 8080, "visible_in": "PROCFS_ONLY"})
 
     def test_unconfirmed_netlink_only_socket_is_not_hidden(self):
-        self.ss_output = 'udp UNCONN 0 0 0.0.0.0:4444 0.0.0.0:*\n'
+        candidate = 'udp UNCONN 0 0 0.0.0.0:4444 0.0.0.0:*\n'
+        calls = [candidate, ""]
+        self.audit.command = lambda *a, **kw: {
+            "status": "COMPLETED", "stdout": calls.pop(0), "stderr": "", "exit": 0,
+            "elapsed_ms": 1, "truncated": False, "error": ""}
         with patch.object(collectors, "PID_RECHECK_DELAY", 0):
             self.audit.crossview()
         self.assertNotIn("HIDDEN_LISTENER", self.rules())
         self.assertEqual(self.audit.stats["crossview"]["listeners"]["unconfirmed_netlink_only"], 1)
+
+    def test_stable_netlink_only_requires_second_confirmation(self):
+        self.ss_output = 'udp UNCONN 0 0 0.0.0.0:4444 0.0.0.0:*\n'
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        [finding] = [f for f in self.audit.findings if f["rule"] == "HIDDEN_LISTENER"]
+        self.assertEqual(finding["evidence"], {"proto": "udp", "port": 4444, "visible_in": "NETLINK_ONLY"})
 
     def test_partial_ss_never_proves_absent_listener(self):
         self.write("/proc/net/tcp", "sl local_address rem_address st\n"

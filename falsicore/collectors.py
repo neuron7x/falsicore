@@ -2158,17 +2158,43 @@ class Audit:
         after = self._procnet_listeners() or set()
         stable = before & after                      # present across the ss call: not a race
         procfs_only = sorted(stable - netlink)
-        # A netlink socket absent both before and after is consistent with
-        # legitimate transient churn; a single ss snapshot cannot prove hiding.
-        unconfirmed_netlink_only = sorted(netlink - before - after)
+        # Transient churn must not be promoted to a rootkit signal.
+        # Confirm a discrepancy with a second complete ss snapshot and a
+        # subsequent procfs read; otherwise retain only an unconfirmed count.
+        suspects = netlink - before - after
+        confirmed: set[tuple[str, int]] = set()
+        if suspects:
+            again = self.command("ss", ["-H", "-tuna", "-p"], timeout=15)
+            if again["status"] == "COMPLETED" and not again.get("truncated"):
+                next_netlink = {
+                    (sock["proto"].rstrip("6"), int(sock["local_port"]))
+                    for sock in d.parse_ss(again["stdout"])
+                    if sock["state"] in ("LISTEN", "UNCONN") and sock["local_port"].isdigit()
+                }
+                after_again = self._procnet_listeners()
+                if after_again is None:
+                    gaps.add("READ_FAILED")
+                else:
+                    confirmed = suspects & next_netlink - after_again
+            else:
+                self.command_gap(again, gaps)
+                if again["status"] == "PARTIAL":
+                    gaps.add("INPUT_TRUNCATED")
+        netlink_only = sorted(confirmed)
         for proto, port in procfs_only[:50]:
             self.finding("HIDDEN_LISTENER", "high",
                          "A listening socket appears in /proc/net but not in the netlink socket table (ss); "
                          "one of the two views is being filtered", "crossview://listeners",
                          {"proto": proto, "port": port, "visible_in": "PROCFS_ONLY"}, attack="T1014")
+        for proto, port in netlink_only[:50]:
+            self.finding("HIDDEN_LISTENER", "high",
+                         "A listening socket is repeatedly present in ss but absent from /proc/net; "
+                         "one kernel view may be filtered", "crossview://listeners",
+                         {"proto": proto, "port": port, "visible_in": "NETLINK_ONLY"}, attack="T1014")
         stats["listeners"] = {"procfs": len(stable), "netlink": len(netlink),
-                              "procfs_only": len(procfs_only),
-                              "unconfirmed_netlink_only": len(unconfirmed_netlink_only)}
+                              "procfs_only": len(procfs_only), "netlink_only": len(netlink_only)}
+        if suspects - confirmed:
+            stats["listeners"]["unconfirmed_netlink_only"] = len(suspects - confirmed)
 
     def _proc_mount_overlays(self, gaps: Gaps, stats: dict[str, Any]) -> None:
         mountinfo = self._proc_self() / "mountinfo"

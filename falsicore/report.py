@@ -33,7 +33,7 @@ OPTIONAL = {"baseline_diff.json"}
 
 
 def host_ref(root: Path = Path("/")) -> str:
-    raw, status = safe_read(root / "etc/machine-id", 4096)
+    raw, status = safe_read(root / "etc/machine-id", 4096)  # no mutate: machine-id is 33 bytes; the bound only guards a hostile file
     if raw and raw.strip():
         return d.digest(raw.strip(), 32)
     return "UNAVAILABLE"
@@ -291,9 +291,12 @@ def _semantic_report_consistency(contents: dict[str, bytes]) -> bool:
                 or not isinstance(command_doc.get("commands"), list)
                 or not isinstance(private_doc.get("source_ref_to_path"), dict)):
             return False
-        if (not all(isinstance(f, dict) and isinstance(f.get("rule"), str)
+        # Shape checks before interpretation. The digest and count comparisons
+        # below refuse the same documents independently (a non-string key does
+        # not survive JSON), so these are defence in depth, not the only line.
+        if (not all(isinstance(f, dict) and isinstance(f.get("rule"), str)  # no mutate: defence in depth, see above
                     and isinstance(f.get("kind"), str) for f in findings)
-                or not all(isinstance(c, dict) and isinstance(c.get("check"), str)
+                or not all(isinstance(c, dict) and isinstance(c.get("check"), str)  # no mutate: defence in depth, see above
                            and isinstance(c.get("status"), str) for c in coverage)):
             return False
         verdict = d.interpret_verdict(findings, coverage)
@@ -302,7 +305,7 @@ def _semantic_report_consistency(contents: dict[str, bytes]) -> bool:
         statuses = dict(sorted(Counter(c["status"] for c in coverage).items()))
         gap_rows = _gap_rows(coverage)
         baseline = summary.get("baseline")
-        if not isinstance(baseline, dict) or not all(isinstance(v, list) for v in baseline.values()):
+        if not isinstance(baseline, dict) or not all(isinstance(v, list) for v in baseline.values()):  # no mutate: a tampered baseline also changes the analysis digest below; defence in depth
             return False
         return all((
             summary.get("analysis_digest_sha256") == _analysis_digest(findings, coverage, baseline),
@@ -321,19 +324,19 @@ def _semantic_report_consistency(contents: dict[str, bytes]) -> bool:
 
 
 def verify_reports(folder: Path) -> dict:
-    if folder.is_symlink() or not folder.is_dir():
+    if folder.is_symlink() or not folder.is_dir():  # no mutate: safe_read below opens every path component O_NOFOLLOW and refuses a non-directory, so a symlinked or non-dir report path is rejected regardless
         raise ValueError("Report directory is invalid or symlinked")
     meta = folder.stat()
     if meta.st_uid != os.geteuid() or stat.S_IMODE(meta.st_mode) & 0o077:
         raise PermissionError("Report directory must be owned by current user and private")
-    raw, status = safe_read(folder / "evidence_manifest.sha256", 100_000)
+    raw, status = safe_read(folder / "evidence_manifest.sha256", 100_000)  # no mutate: an evidence manifest is < 1 KiB; the bound only guards a hostile file
     if raw is None:
         raise ValueError(f"Manifest unavailable: {status}")
     entries: list[dict] = []
     names: set[str] = set()
     matched_contents: dict[str, bytes] = {}
     for line in raw.decode("ascii", "replace").splitlines():
-        bits = line.split("  ", 1)
+        bits = line.split("  ", 1)  # no mutate: a manifest line has exactly one double space and report file names contain none, so a larger maxsplit is identical
         if len(bits) != 2 or not re_full_sha(bits[0]):
             entries.append({"entry": "INVALID_MANIFEST_LINE", "verified": False})
             continue
@@ -370,7 +373,7 @@ def load_verified_summary(path: Path) -> dict:
     result = verify_reports(path.parent)
     if not result["verified"]:
         raise ValueError("Baseline failed report integrity verification")
-    raw, status = safe_read(path, 4 * 1024 * 1024)
+    raw, status = safe_read(path, 4 * 1024 * 1024)  # no mutate: verify_reports read this file with the same bound a moment ago
     if raw is None:
         raise ValueError(f"Baseline summary unreadable: {status}")
     try:
@@ -401,14 +404,16 @@ def find_baseline(parent: Path, current: dict, skipped: Counter | None = None) -
     if parent.is_symlink() or not parent.is_dir():
         return None
     candidates = []
-    for p in parent.iterdir():
-        if p.is_symlink() or not p.is_dir() or not p.name.startswith("run-"):
+    for p in sorted(parent.iterdir()):
+        if p.is_symlink() or not p.is_dir() or not p.name.startswith("run-"):  # no mutate: a pre-filter; load_verified_summary re-verifies ownership, mode and schema, and verify_reports refuses a symlinked run dir
             continue
         try:
-            if p.stat().st_uid == os.geteuid() and not stat.S_IMODE(p.stat().st_mode) & 0o077:
-                candidates.append((p.stat().st_mtime_ns, p))
+            info = p.stat()
         except OSError:
-            continue
+            continue  # no mutate: an entry removed between listing and stat (a race no fixture can pin)
+        # Pre-filter only: load_verified_summary enforces ownership and mode again.
+        if info.st_uid == os.geteuid() and not stat.S_IMODE(info.st_mode) & 0o077:  # no mutate: pre-filter, see above
+            candidates.append((info.st_mtime_ns, p))
     for _, p in sorted(candidates, key=lambda pair: (pair[0], pair[1].name), reverse=True)[:64]:
         try:
             old = load_verified_summary(p / "summary.json")

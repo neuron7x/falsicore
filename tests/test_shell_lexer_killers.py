@@ -38,6 +38,14 @@ class DoubleQuoteEnd(unittest.TestCase):
         self.assertEqual(_double_quote_end('"``"', 1), 4)
         self.assertEqual(_double_quote_end('"`x"y`"', 1), 7)
 
+    def test_brace_expansion_inside_double_quotes_may_contain_quotes(self):  # P-11: _balanced(text, i + 2, "{", "}")
+        self.assertEqual(_double_quote_end('"${}"', 1), 5)
+        self.assertEqual(_double_quote_end('"${x#"y"}"', 1), 10)
+        [w] = _lex('"${cwd#"$ROOT"}"', set())
+        self.assertEqual((w.text, w.expands, w.quoted), ("\x00VAR:?\x00", True, True))
+        self.assertEqual(analyze('rel="${cwd#"$ROOT"}"\n')["limitations"], [])
+        self.assertEqual(analyze('x="${a')["limitations"], ["UNPARSED_QUOTING"])
+
 
 class BacktickEnd(unittest.TestCase):
     def test_escaped_backtick_is_skipped_and_the_scan_continues(self):     # i += 2; continue
@@ -131,6 +139,14 @@ class Lexer(unittest.TestCase):
     def test_heredoc_body_lines_advance_the_line_counter(self):            # line += 1
         self.assertEqual(analyze("cat <<EOF\na\nb\nEOF\n/tmp/x\n")["matches"],
                          [{"line": 5, "patterns": ["TEMP_PATH_IN_EXECUTION"]}])
+
+    def test_line_continuation_advances_the_line_counter(self):            # line += 1 (backslash-newline)
+        self.assertEqual(analyze("true \\\n\n/tmp/x")["matches"], [{"line": 3, "patterns": ["TEMP_PATH_IN_EXECUTION"]}])
+
+    def test_double_quoted_word_is_quoted(self):                           # w.quoted = True (double quotes)
+        [w] = _lex('"x"', set())
+        self.assertTrue(w.quoted)
+        self.assertEqual(analyze('"if" /tmp/x')["patterns"], [])            # a quoted reserved word is a program (P-10)
 
 
 class Bounds(unittest.TestCase):

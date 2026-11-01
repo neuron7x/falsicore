@@ -129,6 +129,10 @@ def _double_quote_end(text: str, i: int) -> int:
         if c == "$" and text.startswith("$(", i):
             i = _balanced(text, i + 2)
             continue
+        if c == "$" and text.startswith("${", i):
+            # Quotes nest inside a brace expansion: "${x#"y"}" is one word (P-11).
+            i = _balanced(text, i + 2, "{", "}")
+            continue
         if c == "`":
             j = _backtick_end(text, i + 1)
             i = j

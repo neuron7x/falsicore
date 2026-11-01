@@ -168,6 +168,26 @@ def _replace(tree: ast.Module, target: ast.AST, replacement: ast.AST) -> ast.Mod
     return result
 
 
+def _mutate_span(source: str, node: ast.AST, replacement: ast.AST) -> str:
+    """Rewrite only the selected UTF-8 AST span, never unparse the entire file.
+
+    Python AST column offsets are UTF-8 bytes. Retaining unrelated source
+    bytes prevents source-sensitive tests from killing a formatting artifact.
+    """
+    raw = source.encode("utf-8")
+    lines = raw.splitlines(keepends=True)
+    line = node.lineno
+    end_line = getattr(node, "end_lineno", line)
+    start = sum(map(len, lines[:line - 1])) + node.col_offset
+    stop = sum(map(len, lines[:end_line - 1])) + getattr(node, "end_col_offset", node.col_offset)
+    prefix = lines[line - 1][:node.col_offset]
+    indent = prefix if not prefix.strip() else b""
+    token = ast.unparse(replacement).encode("utf-8").replace(b"\n", b"\n" + indent)
+    mutated = (raw[:start] + token + raw[stop:]).decode("utf-8")
+    ast.parse(mutated)
+    return mutated
+
+
 def generate(module: str, source: str, lines: set[int] | None = None) -> list[Mutant]:
     """Every mutant of `source`; restricted to `lines` when given. Annotated lines are kept but marked."""
     tree = ast.parse(source)
@@ -178,11 +198,11 @@ def generate(module: str, source: str, lines: set[int] | None = None) -> list[Mu
     counter: dict[int, int] = {}
     for node, operator, replacements, scope in sites.sites:
         line = getattr(node, "lineno", None)
-        if line is None or (lines is not None and line not in lines):
+        if line is None or (lines is not None and
+                            not any(line <= changed <= getattr(node, "end_lineno", line) for changed in lines)):
             continue
         for replacement in replacements:
-            mutated_tree = _replace(tree, node, replacement)
-            mutated_source = ast.unparse(mutated_tree)
+            mutated_source = _mutate_span(source, node, replacement)
             counter[line] = counter.get(line, 0) + 1
             mutant = Mutant(module=module, line=line, operator=operator,
                             original=source_lines[line - 1].strip() if line - 1 < len(source_lines) else "",
@@ -467,8 +487,14 @@ def main(argv: list[str] | None = None) -> int:
     print(markdown(result), end="")
     # A mutant that hangs the suite was noticed (the run did not finish): it is
     # reported but is not an open item. Survivors, untested lines and errors are.
-    open_items = sum(result["counts"].get(k, 0) for k in ("SURVIVED", "NO_TESTS", "ERROR"))
-    return 0 if args.allow_survivors or open_items == 0 else 1
+    # --allow-survivors is a measurement mode, never permission to accept
+    # errors, unfinished budgets, or a changed semantic file with no mutants.
+    incomplete = sum(result["counts"].get(k, 0) for k in ("ERROR", "NOT_RUN"))
+    open_items = sum(result["counts"].get(k, 0) for k in ("SURVIVED", "NO_TESTS"))
+    no_selection = bool(args.diff and modules and not result["mutants"])
+    if no_selection:
+        print("Changed runtime code produced zero mutants: NOT_MEASURED", file=sys.stderr)
+    return 0 if not incomplete and not no_selection and (args.allow_survivors or not open_items) else 1
 
 
 if __name__ == "__main__":

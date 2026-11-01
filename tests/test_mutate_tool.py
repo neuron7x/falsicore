@@ -13,6 +13,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tools import mutate
 
@@ -66,6 +67,18 @@ class Generation(unittest.TestCase):
         mutants = [m for m in mutate.generate("s", "def f(a):\n    return a < 3\n") if m.operator.startswith("compare")]
         self.assertEqual(len(mutants), 1)
         self.assertIn("a <= 3", mutants[0].detail)
+
+    def test_continuation_line_selects_enclosing_boolean_operator(self):
+        sample = "def f(a, b):\n    return (a\n            and b)\n"
+        selected = mutate.generate("example", sample, lines={3})
+        self.assertTrue(any(m.operator == "boolop:swap" for m in selected))
+
+    def test_mutations_leave_unrelated_lexical_bytes_unchanged(self):
+        sample = "# REGEX-SENSITIVE: exact annotation\ndef f(a):\n    return a == 1\n"
+        selected = [m for m in mutate.generate("example", sample) if m.operator.startswith("compare")]
+        self.assertTrue(selected)
+        for m in selected:
+            self.assertTrue(m.detail.startswith("# REGEX-SENSITIVE: exact annotation\n"))
 
 
 class Selection(unittest.TestCase):
@@ -128,6 +141,14 @@ class Retry(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()) as out:
                 self.assertEqual(mutate.main(["--retry", str(earlier)]), 0)
             self.assertIn("nothing to retry", out.getvalue())
+
+    def test_incomplete_budget_is_nonzero_even_with_survivor_waiver(self):
+        mocked = {"modules": ["detectors"], "mutants": [{"status": "NOT_RUN", "module": "detectors", "line": 1,
+                 "operator": "compare", "original": "x", "mutated": "y", "mutant_id": "x", "tests": 0, "detail": ""}],
+                  "counts": {"NOT_RUN": 1}, "mutation_score": None, "test_selection": False,
+                  "wall_clock_seconds": 0}
+        with patch.object(mutate, "run", return_value=mocked), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(mutate.main(["--module", "detectors", "--budget", "0", "--allow-survivors"]), 1)
 
 
 if __name__ == "__main__":

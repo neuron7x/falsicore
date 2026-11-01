@@ -166,7 +166,7 @@ def _backtick_end(text: str, i: int) -> int:
     raise _Unterminated
 
 
-def _dollar(text: str, i: int, word: Word, gaps: set[str]) -> int:
+def _dollar(text: str, i: int, word: Word, gaps: set[str] | None = None) -> int:
     """Consume an expansion starting at text[i] == '$'. Returns next index.
 
     Variables become a marker that keeps the name (\x00VAR:NAME\x00) so a
@@ -189,7 +189,7 @@ def _dollar(text: str, i: int, word: Word, gaps: set[str]) -> int:
         # The static subset cannot safely resolve shell code nested in a
         # parameter expansion. Preserve an explicit incomplete result rather
         # than silently treating the expression as an ordinary variable.
-        if "$(" in inner or "`" in inner:
+        if gaps is not None and ("$(" in inner or "`" in inner):
             gaps.add("PARAMETER_EXPANSION_NOT_ANALYZED")
         word.expands = True
         word.text += "\x00VAR:%s\x00" % (inner if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", inner) else "?")
@@ -646,10 +646,17 @@ class _Analysis:
             options = [w.text for w in args if w.text.startswith("-") and w.text != "-"]
             if any(o == inline or o == "--eval" or (not o.startswith("--") and inline[1] in o[1:]) for o in options):
                 self.gaps.add("INLINE_INTERPRETER_CODE_NOT_ANALYZED")
-                # Inline-code operands are not soundly identified for every
-                # interpreter option form. Never attribute unrelated argv data
-                # as executed code; retain an explicit limitation instead.
-                self.gaps.add("INLINE_INTERPRETER_CODE_NOT_ANALYZED")
+                # Bind substitutions to the actual -c/-e/-r/--eval code
+                # operand. Extra argv data is not automatically executed.
+                for i, option in enumerate(args):
+                    flag = option.text
+                    if not flag.startswith("-") or flag == "-":
+                        continue
+                    if flag == inline or flag == "--eval" or (
+                            not flag.startswith("--") and inline[1] in flag[1:]):
+                        inline_word = args[i + 1] if (flag == inline or flag == "--eval" or
+                                                      flag.endswith(inline[1])) and i + 1 < len(args) else option
+                        self._code_from(self._word_sources.get(id(inline_word), set()), line)
                 return "", False
             if "-m" in options:
                 return "", False

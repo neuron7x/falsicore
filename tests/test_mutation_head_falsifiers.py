@@ -165,6 +165,37 @@ class ProcVisibilityResultCounters(unittest.TestCase):
         self.assertEqual(gaps.incomplete["ENUMERATION_LIMIT"], 1)
 
 
+    def test_pid_max_file_cap_rejects_overlong_input_but_accepts_exact_edge(self):
+        # Benign twin: exactly 64 bytes remains a valid bounded observation.
+        self.mount.write_bytes(ProcMountAdversarialFormat.VALID)
+        self.pid_max.write_bytes(b"1" + b" " * 63)
+        gaps, result = self.measure()
+        self.assertEqual(result["pid_max_probed"], 1)
+        self.assertFalse(gaps.incomplete)
+
+        # At 65 bytes the PID bound must be rejected. The exact diagnostic
+        # matters: a generic READ_FAILED alone hides truncated evidence.
+        # Detects read-limit 64->65 and deleted read_gap() mutants.
+        self.pid_max.write_bytes(b"1" + b" " * 64)
+        self.audit.pid_probe = lambda _pid: self.fail("overlong bound must not be probed")
+        gaps, result = self.measure()
+        self.assertEqual(result, {
+            "status": "PID_MAX_UNAVAILABLE", "hidden": 0, "pid_max_probed": 0})
+        self.assertEqual(gaps.incomplete["INPUT_TRUNCATED"], 1)
+        self.assertEqual(gaps.incomplete["READ_FAILED"], 1)
+
+    def test_pid_max_equal_to_sweep_limit_has_no_truncation_gap(self):
+        # Equality is complete; only a strictly larger bound is incomplete.
+        self.mount.write_bytes(ProcMountAdversarialFormat.VALID)
+        self.pid_max.write_text("2")
+        with patch.object(collectors, "PID_SWEEP_MAX", 2):
+            gaps, result = self.measure()
+        self.assertEqual(result["pid_max_probed"], 2)
+        self.assertNotIn("ENUMERATION_LIMIT", gaps.incomplete)
+        self.assertFalse(gaps.incomplete)
+
+
+
 class LexicalRecursionBudget(unittest.TestCase):
     def test_balanced_default_nesting_budget_has_a_strict_boundary(self):
         # Alternating double quotes and command substitutions cost two levels

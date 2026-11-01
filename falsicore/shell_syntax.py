@@ -654,22 +654,50 @@ class _Analysis:
             return self._shell(args, cmd, procsub_emits, line)
         if re.fullmatch(r"python(?:\d+(?:\.\d+)?)?", name) or name in INTERPRETERS:
             inline = "-c" if name.startswith("python") else INTERPRETERS[name]
-            options = [w.text for w in args if w.text.startswith("-") and w.text != "-"]
-            if any(o == inline or o == "--eval" or (not o.startswith("--") and inline[1] in o[1:]) for o in options):
+            # Options are meaningful only BEFORE the script/module operand.
+            # A literal script followed by "-c $(curl ...)" passes those words
+            # as ordinary argv; it does not execute the downloaded data.
+            prefix: list[tuple[int, Word]] = []
+            for position, option in enumerate(args):
+                if option.text == "--" or option.text == "-" or not option.text.startswith("-"):
+                    break
+                prefix.append((position, option))
+            code_words: list[Word] = []
+            uncertain_code_option = False
+            for position, option in prefix:
+                flag = option.text
+                is_node = name in {"node", "nodejs"}
+                if flag == inline or (is_node and flag == "--eval"):
+                    if position + 1 < len(args):
+                        code_words.append(args[position + 1])
+                    else:
+                        uncertain_code_option = True
+                elif is_node and flag.startswith("--eval="):
+                    # The shell substituted the value inside the *same* word.
+                    code_words.append(option)
+                elif flag.startswith(inline) and len(flag) > len(inline):
+                    # Short attached form: -cPROGRAM / -ePROGRAM / -rCODE.
+                    code_words.append(option)
+                elif (name.startswith("python") and flag.startswith("-")
+                      and not flag.startswith("--") and flag.endswith("c")
+                      and len(flag) > 2 and
+                      all(ch in "BbEdEiIOqsSuUvVW" for ch in flag[1:-1])):
+                    # Explicitly recognized no-value Python short-option group.
+                    if position + 1 < len(args):
+                        code_words.append(args[position + 1])
+                    else:
+                        uncertain_code_option = True
+                elif (flag.startswith("--eval") or
+                      (not flag.startswith("--") and inline[1] in flag[1:])):
+                    # An unfamiliar compound form is NOT proof of executed
+                    # code; preserve uncertainty rather than guessing argv.
+                    uncertain_code_option = True
+            if code_words or uncertain_code_option:
                 self.gaps.add("INLINE_INTERPRETER_CODE_NOT_ANALYZED")
-                # Bind substitutions to the actual -c/-e/-r/--eval code
-                # operand. Extra argv data is not automatically executed.
-                for i, option in enumerate(args):
-                    flag = option.text
-                    if not flag.startswith("-") or flag == "-":
-                        continue
-                    if flag == inline or flag == "--eval" or (
-                            not flag.startswith("--") and inline[1] in flag[1:]):
-                        inline_word = args[i + 1] if (flag == inline or flag == "--eval" or
-                                                      flag.endswith(inline[1])) and i + 1 < len(args) else option
-                        self._code_from(self._word_sources.get(id(inline_word), set()), line)
+                for word in code_words:
+                    self._code_from(self._word_sources.get(id(word), set()), line)
                 return "", False
-            if "-m" in options:
+            if any(w.text == "-m" for _i, w in prefix):
                 return "", False
             return "", self._script_operand(args, procsub_emits, line, cmd)
         if name.lower() in {"powershell", "pwsh"} and any(t.lower() == "-encodedcommand" for t in text[1:]):

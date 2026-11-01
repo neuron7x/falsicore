@@ -40,6 +40,10 @@
 | [MITRE ATT&CK](https://attack.mitre.org/) | hypothesis-driven signal categorization | stable rule IDs and technique references | full ATT&CK telemetry not available |
 | [MITRE CWE](https://cwe.mitre.org/) | well-defined source weaknesses | nine conservative AST checks | no comprehensive dataflow analysis |
 
+Primary sources behind each row, verified against publisher pages, are in
+`BIBLIOGRAPHY.md`; the table above names the control, the bibliography names
+the reason.
+
 ## Measurement contract
 
 - Test count = number of executable unit/integration cases that passed, **not** detection efficacy.

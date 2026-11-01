@@ -59,7 +59,7 @@ gaps, now closed by `tests/test_mutation_killers.py`: the severity of
 `debug_port` range, every return value of `endpoint_class`, and
 `interpret_verdict` for low-severity indicators.
 
-## First in-repo run (0.1.4, `detectors.py`)
+## First in-repo run (0.2.0, `detectors.py`)
 
 `tools/mutate.py --module detectors`: 307 mutants, 303 killed, 4 open before
 review → two annotated as equivalent (`split(..., 1)[0]` and

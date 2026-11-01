@@ -147,6 +147,19 @@ Defects found, fault-injection results and gates are recorded in
 [`docs/AUDIT.md`](docs/AUDIT.md). Measured values and their environment are in
 [`docs/RELEASE_EVIDENCE.json`](docs/RELEASE_EVIDENCE.json).
 
+## Grounding
+
+Each design decision is traced to a verified primary source in
+[`docs/BIBLIOGRAPHY.md`](docs/BIBLIOGRAPHY.md): the bounded verdict to the
+base-rate fallacy and the critiques of detector evaluation (Axelsson 2000;
+McHugh 2000; Sommer & Paxson 2010; Rossow et al. 2012); the trust boundary
+to Thompson 1984 and Saltzer & Schroeder 1975; cross-view consistency to
+Wang et al. 2005; integrity by recorded digest and its limit to Kim &
+Spafford 1994; offline analysis to NIST SP 800-86; mutation and property
+testing to DeMillo et al. 1978, Jia & Harman 2011, Just et al. 2014,
+Inozemtseva & Holmes 2014 and Claessen & Hughes 2000. A source grounds a
+decision; it does not certify the tool.
+
 ## Limitations
 
 - **Detection.** Heuristic detectors, never validated against a malware

@@ -1,6 +1,9 @@
-# FALSICORE 0.1.3 — audit record
+# FALSICORE audit record (0.1.3 → 0.2.0)
 
-This record covers the 0.1.2 → 0.1.3 repair. Three read-only review passes ran
+Sections dated 0.2.0 (property-based testing, detection validity, package
+managers, cross-view consistency, offline mode, mutation testing) extend the
+0.1.3 record below; every refuted claim is kept with its disposition. The
+0.1.3 part covers the 0.1.2 → 0.1.3 repair. Three read-only review passes ran
 as separate agents. Each had its own scope: A, execution and subprocess
 lifecycle; B, collection, parsing and attribution; C, verdicts, privacy,
 reporting and packaging. Every review drew on the same model family, so this is
@@ -26,7 +29,7 @@ point to 0.1.3 code.
 | A-4 | `cli.py` scan | Ctrl-C ended in a raw traceback and left an unexplained empty run folder. | `SCAN CANCELLED`, run path printed, exit 130; owned probe groups are killed | `test_keyboard_interrupt_returns_130_with_run_path`; live SIGINT run (below) |
 | A-5, A-6 | `safety.py` `_run_bounded` | A daemonised grandchild survived a `COMPLETED` probe. The leader was reaped before `killpg`, so its PID or group could be reused. | The leader is observed with `waitid(WNOWAIT)` and never reaped before the final `killpg`; residual members are reported | `test_executor_lifecycle.py` |
 | A-7 | `safety.py` | A death by signal could not be told apart from exit 1. An escaped pipe holder went unlabelled. | `error="signal:SIGSEGV"`; `PIPE_HOLDER_OUTSIDE_GROUP` | same |
-| A-8 | `collectors.py` `scan` | The whole-scan deadline was cooperative. A blocking read inside a collector (a FIFO, a hung filesystem) was never interrupted, so the scan could hang past its budget. | **Fixed in 0.1.4.** A one-shot `SIGALRM` armed at budget + grace (5 %, ≥2 s) raises `DeadlineExpired` inside the running collector only; the collector becomes `FAILED/BUDGET_EXHAUSTED` with its observations rolled back, later collectors are `SKIPPED`, the timer is disarmed and the previous handler restored. The executor's cleanup runs under `deferred_alarm()` so a probe group is always killed and reaped. Outside the main thread the scan records `hard_deadline.armed=false` and keeps the cooperative budget. | `test_hard_deadline.py` (FIFO-blocked collector; alarm during a live probe) |
+| A-8 | `collectors.py` `scan` | The whole-scan deadline was cooperative. A blocking read inside a collector (a FIFO, a hung filesystem) was never interrupted, so the scan could hang past its budget. | **Fixed in 0.2.0.** A one-shot `SIGALRM` armed at budget + grace (5 %, ≥2 s) raises `DeadlineExpired` inside the running collector only; the collector becomes `FAILED/BUDGET_EXHAUSTED` with its observations rolled back, later collectors are `SKIPPED`, the timer is disarmed and the previous handler restored. The executor's cleanup runs under `deferred_alarm()` so a probe group is always killed and reaped. Outside the main thread the scan records `hard_deadline.armed=false` and keeps the cooperative budget. | `test_hard_deadline.py` (FIFO-blocked collector; alarm during a live probe) |
 | A-9 | `safety.py` | stderr was merged into the parsed stdout: journalctl hints were miscounted as malformed, bus errors were shown as a status. | Separate bounded stderr (64 KiB), never parsed as data | `test_stderr_is_separate_from_parsed_stdout` |
 | B-1 | `collectors.py` `processes` | Exposure records kept only the PID, so after the process exited (an observed browser process in the originating incident) it could not be identified. | A pinned `/proc/<pid>` dirfd. Observations capture PID, PPID, UID, `start_ticks` (stat field 22), `boot_id`, executable name, dev:ino, mode, owner, bounded SHA-256, and the parent's start time and name. | `LiveProcessAttribution` (disposable `/tmp` copy of `sleep`) |
 | B-2 | `processes` | A cmdline longer than 8 KiB lost its flags with no record, and the scan reported clean. | 64 KiB bound; overflow counts as `INPUT_TRUNCATED` → PARTIAL | `test_truncated_cmdline_is_incompleteness_not_clean` |
@@ -62,7 +65,7 @@ point to 0.1.3 code.
 | R-10 | `tools/build_release.py`, CI | Found on Dependabot PR #1: `SOURCE_MANIFEST.sha256` also hashed `.github/` workflows, so every automated workflow update failed CI (manifest stale), and dependency updates could never land unattended. | Workflows are excluded from the source manifest and the portable app. They ship in the full ZIP's `source/` tree, covered by `SHA256SUMS`. Weekly scheduled CI added. | `test_workflow_changes_do_not_invalidate_source_manifest` |
 | L-1 | `cli.py` explain/verify | A 0.1.2 (schema v3) report was rejected as "integrity failed". | Detected as `LEGACY`: file hashes are checked, semantics are not re-derived, and it is never compared with new reports | `LegacyReports` |
 
-## Property-based testing (0.1.4)
+## Property-based testing (0.2.0)
 
 `tests/test_properties.py` states universally quantified claims with
 Hypothesis (development dependency; the shipped tool stays standard-library).
@@ -92,7 +95,7 @@ and `.desktop` adapters split on `str.splitlines()`, which also breaks on
 No evasion follows (both halves are still analysed), so the single-line model
 excludes those characters instead of changing the adapters.
 
-## Detection validity (0.1.4)
+## Detection validity (0.2.0)
 
 `tools/validity.py` builds a hermetic fixture host per scenario (own root,
 home and `/proc`; probe commands answered from canned text through the same
@@ -116,13 +119,13 @@ Known gaps are listed as such and never counted: a relative program after
 `cd`, a download bound to a variable before `eval`.
 
 The harness paid for itself again when the package collector was generalised
-(0.1.4, `falsicore/packages.py`):
+(0.2.0, `falsicore/packages.py`):
 
 | ID | Scenario | Cause | Disposition |
 |---|---|---|---|
 | V-3 | every pacman and apk scenario | `safe_read` refuses a bound above 8 MiB; the new verification passed 64 MiB (files) and 128 MiB (apk database), so the whole `packages` collector raised and was rolled back to `FAILED/COLLECTOR_ERROR` — on every Arch and Alpine host. | bounds set to `safe_read`'s ceiling; larger files count as unverifiable; the scenarios now pass |
 
-Cross-view consistency (`crossview`, 0.1.4) adds four rules whose positive
+Cross-view consistency (`crossview`, 0.2.0) adds four rules whose positive
 scenarios plant a readdir-hidden process, a lookup-hidden process, a module
 live only in sysfs, a listener visible in one socket view only, and a mount
 over `/proc/<pid>`; benign twins plant thread IDs, a built-in module, a
@@ -130,14 +133,14 @@ listener in both views and the standard `binfmt_misc` mount. Report schema
 is `falsicore.summary.v5`; v4 reports are read as LEGACY because the essential
 set and the rule names changed.
 
-Offline image mode (0.1.4, `--root`): the live-only collectors are declared
+Offline image mode (0.2.0, `--root`): the live-only collectors are declared
 `SKIPPED/LIVE_ONLY_NOT_IN_OFFLINE_IMAGE` and leave the essential set; every
 probe but the image's own journal is refused as a scope limit; the harness
 runs a third clean host (offline) and three offline scenarios, one of which
 plants a volatile process, a hidden PID and an exposed listener in the
 fixture's live views and requires them to stay unreported for an image.
 
-No site is special-cased (0.1.4): the browser-extension assessment used to
+No site is special-cased (0.2.0): the browser-extension assessment used to
 single out Instagram hosts (`instagram_access_potential`,
 `content_script_instagram_access`), a remnant of the originating incident.
 It now reports `host_scope` and `content_script_scope` from the match-pattern
@@ -148,7 +151,7 @@ site without any API is no longer flagged (it was, for one site only).
 The grammar function (`grants_host_access`) and its substring-evasion tests
 (`fakeexample.com`, `example.com.evil`) are unchanged in substance.
 
-Rule renames in 0.1.4 (one rule per observation, the manager is evidence):
+Rule renames in 0.2.0 (one rule per observation, the manager is evidence):
 `DPKG_FILE_DRIFT` → `PACKAGE_FILE_DRIFT`, `DPKG_CONFFILE_CHANGED` →
 `PACKAGE_CONFFILE_CHANGED`, `DPKG_FILES_MISSING` → `PACKAGE_FILES_MISSING`,
 `INSECURE_APT_REPOSITORY_SETTING` → `INSECURE_PACKAGE_SOURCE_SETTING`; new
@@ -183,7 +186,7 @@ These are adopted practices. No compliance or certification is claimed.
 | Gate | Status | Evidence / limit |
 |---|---|---|
 | G1 host and user work preserved | PASS | Writes were limited to: the repository working copy; new private run folders (`~/falsicore-runs/run-*` and the agent scratch folder); `.falsicore-audit/`; disposable `/tmp/fc-attr-*` test copies, which are removed after each test. Nothing was deleted from `~/falsicore-runs`. There was no browser, shell, service, package or extension change. |
-| G2 release-blocking defects fixed | PASS | B-1, B-4, B-6 and every major finding above. A-8 was a documented limitation in 0.1.3 and is fixed in 0.1.4. |
+| G2 release-blocking defects fixed | PASS | B-1, B-4, B-6 and every major finding above. A-8 was a documented limitation in 0.1.3 and is fixed in 0.2.0. |
 | G3 complete retained suite passes | PASS | 548 discovered / 548 passed / 0 failed / 0 errors / 0 skipped. All 24 baseline test files are kept; 31 now. |
 | G4 positive/negative/failure tests for changed logic | PASS | per-row tests; `test_failure_paths.py` |
 | G5 progress, cancellation, deadlines via real launcher | PASS | `./run.sh` progress and heartbeat. Live SIGINT during `dpkg --verify` (a deep profile run under this account): the scan exited 40 ms later, the owned `dpkg` child was killed, exit 130. |

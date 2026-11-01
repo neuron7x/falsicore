@@ -98,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     gate.run("source-audit", [py, "tools/code_audit.py", ".", "--fail-on", "high"])
     gate.run("rule-fixtures", [py, "-m", "tools.evaluate_rules"])
     gate.run("detection-validity", [py, "tools/validity.py", "--check"])
+    gate.run("release-evidence-current", [py, "tools/release_evidence.py", "--check"])
     if not args.quick:
         gate.tool("ruff", "ruff", [py, "-m", "ruff", "check", "--select", "F,E9,B,PLE", "falsicore", "tools", "falsicore.py"])
         gate.tool("bandit", "bandit", [py, "-m", "bandit", "-q", "-r", "falsicore", "tools", "falsicore.py", "-c", "pyproject.toml"])

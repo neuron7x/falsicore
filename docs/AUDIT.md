@@ -133,6 +133,10 @@ listener in both views and the standard `binfmt_misc` mount. Report schema
 is `falsicore.summary.v5`; v4 reports are read as LEGACY because the essential
 set and the rule names changed.
 
+| ID | Where | Refuted claim / impact | Found by | Fix |
+|---|---|---|---|---|
+| CV-1 | `collectors.crossview` | On every live host the check was `PARTIAL` (`READ_FAILED`, `SYMLINK_NOT_FOLLOWED`): `/proc/self` and `/proc/net` are symlinks, which the no-follow reader refuses by design, so mount overlays and `/proc/net` listeners were never read. The fixture hosts have a real `self` directory and could not show it. | the first 0.2.0 scan of a real host | read `/proc/<own pid>/mountinfo` and `/proc/<own pid>/net/*` on a live host; a live test asserts both reads succeed without a gap |
+
 Offline image mode (0.2.0, `--root`): the live-only collectors are declared
 `SKIPPED/LIVE_ONLY_NOT_IN_OFFLINE_IMAGE` and leave the essential set; every
 probe but the image's own journal is refused as a scope limit; the harness

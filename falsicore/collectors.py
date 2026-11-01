@@ -1937,6 +1937,15 @@ class Audit:
                       "no raw messages retained; absence of logging is not absence of incident", gaps, lines)
 
     # ---- cross-view consistency -------------------------------------------------
+    def _proc_self(self) -> Path:
+        """Our own /proc entry. On a live host /proc/self and /proc/net are symlinks,
+        which the no-follow reader refuses by design; a fixture /proc has a real
+        `self` directory. Found by the first 0.2.0 scan of a real host (CV-1)."""
+        own = self.proc_root / "self"
+        if own.is_symlink():
+            return self.proc_root / str(os.getpid())
+        return own
+
     def _listed_pids_and_tids(self) -> tuple[set[int], set[int]]:
         listed: set[int] = set()
         tids: set[int] = set()
@@ -2036,8 +2045,11 @@ class Audit:
     def _procnet_listeners(self) -> set[tuple[str, int]] | None:
         found: set[tuple[str, int]] = set()
         any_read = False
+        net = self._proc_self() / "net"
+        if not net.is_dir():
+            net = self.proc_root / "net"          # fixture without a per-process net directory
         for name, listen_state in (("tcp", "0A"), ("tcp6", "0A"), ("udp", "07"), ("udp6", "07")):
-            raw, _ = safe_read(self.proc_root / "net" / name, 8 * 1024 * 1024)
+            raw, _ = safe_read(net / name, 8 * 1024 * 1024)
             if raw is None:
                 continue
             any_read = True
@@ -2081,9 +2093,10 @@ class Audit:
                               "procfs_only": len(procfs_only), "netlink_only": len(netlink_only)}
 
     def _proc_mount_overlays(self, gaps: Gaps, stats: dict[str, Any]) -> None:
-        raw, status = safe_read(self.proc_root / "self/mountinfo", 4 * 1024 * 1024)
+        mountinfo = self._proc_self() / "mountinfo"
+        raw, status = safe_read(mountinfo, 4 * 1024 * 1024)
         if raw is None:
-            self.read_gap(self.proc_root / "self/mountinfo", status, gaps)
+            self.read_gap(mountinfo, status, gaps)
             return
         overlays: list[str] = []
         for line in raw.decode("utf-8", "replace").splitlines():

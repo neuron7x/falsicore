@@ -71,5 +71,28 @@ another's source (now a queue hands each running mutant its own tree), and
 coverage contexts attribute a `def` line to import time, so default-argument
 mutants were `NO_TESTS` until selection fell back to the enclosing function.
 
+## In-repo baseline per module (0.2.0, before the killer tests of PR #13)
+
+| Module | Mutants | Killed | Survived | Hung | Open items |
+|---|---:|---:|---:|---:|---:|
+| `detectors.py` | 307 | 303 → 305 | 4 → 0 | 0 | 0 (2 annotated, 1 dead parameter removed) |
+| `shell_syntax.py` | 811 | 645 | 139 | 27 | 139 |
+| `report.py` | 285 | 197 | 85 | 3 | 85 |
+| `safety.py` | 287 | 194 | 90 | 3 | 90 |
+
+A hung mutant (`TIMEOUT`) is noticed by the run and is not an open item. The
+survivors of `shell_syntax` clustered in the quote-aware scanners inside
+`$(…)`, here-document line accounting, process substitution and the
+stdin-code paths; those of `report` in manifest-line validation, the
+semantic consistency branches and baseline selection; those of `safety` in
+the executor's bounds, exit-code and environment handling and the private
+run directory. `tests/test_{shell,report,safety}_mutation_killers.py` target
+them; the re-measurement is appended here when it has run.
+
+The diff gate earned its place on its first pull request: the CV-1 fix
+arrived with four surviving mutants on the new `mountinfo` read (bound
+constants and the `read_gap` call) and was refused until two fixture tests
+pinned the unreadable and the one-byte-over-the-bound cases.
+
 Mutation score is a property of the test suite, not of the tool's detection
 power (ASSURANCE.md, measurement contract).

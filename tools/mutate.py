@@ -368,7 +368,7 @@ def run(modules: dict[str, set[int] | None], workers: int, timeout: float, pytho
         "operators": sorted({m.operator.split(":")[0] for m in results}),
         "modules": sorted(modules), "counts": counts, "mutation_score": None if score is None else round(score, 4),
         "mutants": [asdict(m) for m in results],
-        "interpretation": "KILLED: a test failed. SURVIVED: no test noticed. NO_TESTS: no test executes the line. "
+        "interpretation": "KILLED: a test failed. TIMEOUT: the suite hung (noticed, not open). SURVIVED: no test noticed. NO_TESTS: no test executes the line. "
                           "ANNOTATED: '# no mutate: <reason>' on the line. Survivors are candidates, not verdicts: "
                           "equivalence must be shown, not assumed.",
     }
@@ -427,7 +427,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.markdown:
         args.markdown.write_text(markdown(result))
     print(markdown(result), end="")
-    open_items = sum(result["counts"].get(k, 0) for k in ("SURVIVED", "NO_TESTS", "TIMEOUT", "ERROR"))
+    # A mutant that hangs the suite was noticed (the run did not finish): it is
+    # reported but is not an open item. Survivors, untested lines and errors are.
+    open_items = sum(result["counts"].get(k, 0) for k in ("SURVIVED", "NO_TESTS", "ERROR"))
     return 0 if args.allow_survivors or open_items == 0 else 1
 
 

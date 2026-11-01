@@ -1,17 +1,20 @@
 # falsicore
 
-**Offline, read-only intrusion triage for a single Linux host, with explicit coverage.**
+**Offline, read-only intrusion triage for a single Linux host or a mounted image, with explicit coverage and refutable claims.**
 
 ```bash
-bash run.sh                     # standard profile, current user, ~2 s
+bash run.sh                     # standard profile, current user, ~10 s
 bash run.sh --profile deep      # adds package integrity (dpkg/rpm/pacman/apk), ~60 s
 ```
+
+Version 0.2.0 · Python ≥ 3.10, standard library only · Apache-2.0 · [CHANGELOG](CHANGELOG.md)
 
 ---
 
 ## Abstract
 
-falsicore inspects the running host for traces of intrusion and persistence:
+falsicore inspects a Linux system — the running host, or an offline image
+mounted read-only — for traces of intrusion and persistence:
 
 - processes;
 - network listeners;
@@ -29,6 +32,8 @@ whether its defined target was fully inspected and, if not, why.
 
 The design is falsificationist. The tool never asserts "clean": the absence of
 findings is reported together with the exact scope in which they were absent.
+Every claim the project makes about itself (below) names what would refute it,
+and the refutation is wired into CI.
 
 ## Claims and how to refute them
 
@@ -45,6 +50,21 @@ Each claim below is enforced by code and covered by tests.
 | C7 | Two builds of one source snapshot are byte-identical, on the same platform. | Differing bytes from `tools/build_full.py` run twice. |
 | C8 | Every rule detects the artifact shape it targets and stays silent on that shape's benign twin, on a hermetic fixture host whose unplanted state reaches `NO_COMPROMISE_INDICATORS_OBSERVED`. | A planted scenario in `tools/validity.py` that is missed, a benign twin that alarms, or a rule with no positive scenario (`docs/DETECTION_VALIDITY.json`). This is recall on synthetic shapes, not sensitivity to real malware. |
 | C9 | Every runtime line changed by a pull request arrives with tests that fail when the line is wrong: no mutant on a changed line survives (`tools/mutate.py --diff`). | A surviving or untested mutant on a changed line (CI job `mutation-diff`). The weekly whole-package table (`docs/MUTATION.md`) is the open work list, not a claim. |
+
+## Measured evidence (0.2.0)
+
+Numbers are produced by tools in this repository and bound to the commit that
+carries them; CI fails when a committed table is stale.
+
+| What | Value | Produced by | Where |
+|---|---|---|---|
+| Unit, adversarial, lifecycle and property tests | 750 ran, 0 failed, 0 skipped (Hypothesis required) | `tools/release_evidence.py` | `docs/RELEASE_EVIDENCE.json` |
+| Branch coverage of the runtime package | 91 % (gate 88 %) — exercised code, not correctness | `coverage.py` | same |
+| Static analysis | ruff, bandit, mypy (zero errors), AST audit, rule fixtures: all exit 0 | same | same |
+| Detection validity | 96 scenarios: 57 planted shapes detected, 27 benign twins silent, 2 known gaps; 3 clean hosts (user, system, offline) at `NO_COMPROMISE_INDICATORS_OBSERVED` | `tools/validity.py` | `docs/DETECTION_VALIDITY.json` |
+| Mutation testing | 0.1.3 external baseline 56 % killed (14 675 mutants); `detectors.py` 0 open items; per-module table and work list | `tools/mutate.py` | `docs/MUTATION.md` |
+| Reproducible builds | two `.pyz` and two full-ZIP builds byte-identical (same platform) | `verify.yml`, `release.yml` | release assets with external checksums |
+| Defects found and kept | A-1…L-1 (0.1.3), P-1…P-9, V-1…V-3, CV-1 (0.2.0), each with its refutation and fix | review, properties, harness, real-host scan | `docs/AUDIT.md` |
 
 ## Method
 
@@ -78,12 +98,27 @@ from a closed vocabulary (`docs/DETECTORS.md`).
 **Static shell analysis.** A quote-aware lexer recognises:
 
 - literal execution from volatile paths;
-- downloads or decoded data piped into interpreters;
-- process substitution;
+- downloads or decoded data piped into interpreters, including through
+  substitutions (`eval "$(curl …)"`, `sh -c "$(…)"`);
+- process substitution and `/dev/tcp` redirections (reverse-shell idiom);
 - command-valued settings (`PROMPT_COMMAND`, `alias`, `trap`).
 
-It follows sourced files. A root-owned file whose content matches its dpkg
-record is marked *package-attested*: a stated trust assumption.
+It follows sourced files. A root-owned file whose content matches its package
+record is marked *package-attested*: a stated trust assumption. Everything the
+lexer cannot resolve is a named limitation (`docs/DETECTORS.md`), never a
+guess in either direction.
+
+**Cross-view consistency.** The same fact is read through two kernel
+interfaces and the difference is the finding (Wang et al. 2005): the PID sweep
+against the `/proc` listing, `/sys/module` against `/proc/modules`,
+`/proc/net` against the netlink socket table, and mounts over `/proc/<pid>`.
+Races are excluded by a confirming pass; a rootkit that hooks both views of a
+pair stays unseen, and the documentation says so.
+
+**Offline image mode.** `scan --root /mnt/image` reads a mounted root instead
+of the live host (NIST SP 800-86): live-only checks are declared `SKIPPED`
+with a scope code and leave the essential set; probes against the live kernel
+are refused; users, crontabs and package records come from the image.
 
 **Verdict.** The outcome is one of:
 
@@ -130,18 +165,24 @@ Ctrl-C stops the scan, kills the probes it started and exits with 130.
 ## Reproducing the evidence
 
 ```bash
+python3 tools/gate.py                                         # everything CI runs, locally (fails closed)
 sha256sum -c SOURCE_MANIFEST.sha256 && python3 tools/build_release.py --check-manifest
 python3 -m unittest discover -s tests -q                     # full suite
 python3 -m coverage run --branch --source=falsicore -m unittest discover -s tests -q
+python3 tools/validity.py                                    # planted artifacts vs benign twins, as a table
+python3 tools/mutate.py --coverage && python3 tools/mutate.py --module detectors
+python3 tools/release_evidence.py                            # re-measure docs/RELEASE_EVIDENCE.json
 python3 tools/build_full.py /tmp/a && python3 tools/build_full.py /tmp/b && cmp /tmp/a/*.zip /tmp/b/*.zip
 ```
 
 CI ([`verify.yml`](.github/workflows/verify.yml)) does the following:
 
-- runs the suite on Python 3.10–3.14;
-- runs ruff (correctness rules), bandit, CodeQL and a branch-coverage gate;
+- runs the suite on Python 3.10–3.14 with Hypothesis required;
+- runs ruff (correctness rules), bandit, mypy, CodeQL and a branch-coverage gate;
+- checks that the committed validity table and release evidence are current;
+- mutates every runtime line a pull request changes and requires all mutants killed;
 - compares double builds;
-- repeats weekly, unattended.
+- repeats weekly, unattended; a weekly whole-package mutation run uploads its table.
 
 Defects found, fault-injection results and gates are recorded in
 [`docs/AUDIT.md`](docs/AUDIT.md). Measured values and their environment are in
@@ -162,8 +203,11 @@ decision; it does not certify the tool.
 
 ## Limitations
 
-- **Detection.** Heuristic detectors, never validated against a malware
-  corpus. Coverage percentages measure exercised code, not sensitivity.
+- **Detection.** Heuristic detectors validated against planted artifact
+  shapes and their benign twins (`docs/DETECTION_VALIDITY.json`), never
+  against a malware corpus: the table is recall on shapes the authors thought
+  of, not sensitivity in the field. Coverage and mutation score measure the
+  test suite, not detection power.
 - **Trust.** A live scan trusts the running kernel. A root, kernel or firmware
   adversary can forge every observation, including dpkg records.
 - **Remote state.** Account sessions on remote services and deleted history

@@ -1,8 +1,8 @@
-# Security policy — FALSICORE 0.1
+# Security policy — FALSICORE 0.2
 
 ## Supported line
 
-Version `0.1.x` is **experimental**. No guaranteed response SLA or long-term support has been promised. Releases may contain incomplete telemetry or false positives/negatives. Older internal prototypes are unsupported.
+Version `0.2.x` is **experimental**. No guaranteed response SLA or long-term support has been promised. Releases may contain incomplete telemetry or false positives/negatives. Older internal prototypes are unsupported.
 
 ## Reporting
 

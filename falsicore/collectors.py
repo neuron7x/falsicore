@@ -288,8 +288,13 @@ def _ss_listener_endpoints(output: str) -> set[tuple[str, str, int]] | None:
     result: set[tuple[str, str, int]] = set()
     for row in output.splitlines():
         fields = row.split()
-        if len(fields) < 2 or fields[0] not in ("tcp", "udp", "tcp6", "udp6"):
+        if not fields:
             continue
+        if fields[0] not in ("tcp", "udp", "tcp6", "udp6"):
+            continue
+        # A truncated known-protocol row is not proof of socket absence.
+        if len(fields) < 2:
+            return None
         if fields[1] not in ("LISTEN", "UNCONN"):
             continue
         if len(fields) < 5:

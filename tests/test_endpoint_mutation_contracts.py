@@ -69,6 +69,14 @@ class SocketTableParsing(unittest.TestCase):
             with self.subTest(row=row):
                 self.assertIsNone(_ss_listener_endpoints(row))
 
+    def test_single_token_known_transport_is_incomplete_not_absent(self):
+        # A truncated ss row must fail closed: it cannot prove no listeners.
+        for row in ("tcp", "udp", "tcp6", "udp6"):
+            with self.subTest(row=row):
+                self.assertIsNone(_ss_listener_endpoints(row))
+        self.assertEqual(_ss_listener_endpoints(""), set())
+        self.assertEqual(_ss_listener_endpoints("unknown-protocol"), set())
+
     def test_malformed_socket_endpoints_fail_closed(self):
         for row in (
             "tcp LISTEN 0 0 127.0.0.1:000001",
@@ -179,6 +187,74 @@ class RepeatedObservationGaps(unittest.TestCase):
         self.assertEqual(gaps.incomplete["TOOL_FAILED"], 1)
         self.assertEqual(stats["listeners"]["netlink_only"], 0)
         self.assertEqual(findings, [])
+
+
+class ListenerFindingBounds(unittest.TestCase):
+    """FC-11/13: cap finding emission, without collapsing distinct addresses."""
+
+    @staticmethod
+    def audit_with(snapshots, replies):
+        audit = Audit.__new__(Audit)
+        audit._procnet_listeners = lambda: snapshots.pop(0)
+        commands = []
+        def command(*args, **kwargs):
+            commands.append((args, kwargs))
+            return replies.pop(0)
+        audit.command = command
+        found = []
+        audit.finding = lambda *args, **kwargs: found.append((args, kwargs))
+        audit._listener_evidence = lambda endpoint, view: {"endpoint": endpoint, "view": view}
+        return audit, found, commands
+
+    @staticmethod
+    def reply(stdout):
+        return {"status": "COMPLETED", "stdout": stdout, "truncated": False}
+
+    def test_procfs_only_emission_is_capped_without_losing_count(self):
+        endpoints = {("tcp4", "127.0.0.1", 20000 + i) for i in range(51)}
+        audit, found, commands = self.audit_with(
+            [endpoints, endpoints], [self.reply("")])
+        stats, gaps = {}, Gaps()
+        audit._hidden_listeners(gaps, stats)
+        self.assertEqual(len(found), 50)
+        self.assertEqual(stats["listeners"]["procfs_only"], 51)
+        self.assertEqual(stats["listeners"]["netlink_only"], 0)
+        self.assertEqual(len(commands), 1)
+
+    def test_reconfirmed_netlink_only_emission_is_capped_and_bounded(self):
+        ss = "".join(
+            f"tcp LISTEN 0 0 127.0.0.1:{20000 + i} 0.0.0.0:*\\n"
+            for i in range(51)).replace("\\n", "\n")
+        audit, found, commands = self.audit_with(
+            [set(), set(), set()], [self.reply(ss), self.reply(ss)])
+        stats, gaps = {}, Gaps()
+        audit._hidden_listeners(gaps, stats)
+        self.assertEqual(len(found), 50)
+        self.assertEqual(stats["listeners"]["netlink_only"], 51)
+        self.assertEqual(stats["listeners"]["unconfirmed_netlink_only"] if
+                         "unconfirmed_netlink_only" in stats["listeners"] else 0, 0)
+        self.assertEqual([kwargs["timeout"] for _, kwargs in commands], [15, 15])
+
+
+class HidepidScopeFalsification(unittest.TestCase):
+    def test_hidepid_is_a_limit_with_zero_hidden_process_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "mountinfo").write_text(
+                "22 1 0:21 / /proc rw,hidepid=2 - proc proc rw\\n".replace("\\n", "\n"))
+            (root / "sys/kernel").mkdir(parents=True)
+            (root / "sys/kernel/pid_max").write_text("1\\n".replace("\\n", "\n"))
+            audit = Audit.__new__(Audit)
+            audit.scope = "user"
+            audit.proc_root = root
+            audit._proc_self = lambda: root
+            audit._listed_pids_and_tids = lambda: (set(), set())
+            audit.pid_probe = lambda pid: False
+            stats, gaps = {}, Gaps()
+            audit._hidden_processes(gaps, stats)
+            self.assertEqual(stats["processes"], {
+                "status": "HIDEPID_RESTRICTED", "hidden": 0, "pid_max_probed": 0})
+            self.assertIn("OTHER_ACCOUNTS_NOT_VISIBLE", gaps.limits)
 
 
 if __name__ == "__main__":

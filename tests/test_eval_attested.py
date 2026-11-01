@@ -45,6 +45,15 @@ class AnalyserReportsEvaluatedPrograms(unittest.TestCase):
         self.assertEqual(counted["unresolved_expansions"], 2)
         self.assertEqual(counted["evaluated_programs"], [])
 
+    def test_nested_qualification_and_non_eval_uncertainty_are_preserved(self):
+        qualified = analyze("bash -c 'eval \"$(dircolors -b)\"'")
+        self.assertEqual(qualified["qualified_eval_sites"], ["dircolors"])
+        self.assertEqual(qualified["unresolved_non_eval_sites"], 0)
+        mixed = analyze("bash -c 'eval \"$(dircolors -b)\"; $UNKNOWN --flag'")
+        self.assertEqual(mixed["qualified_eval_sites"], ["dircolors"])
+        self.assertEqual(mixed["unresolved_non_eval_sites"], 1)
+        self.assertEqual(mixed["unresolved_expansions"], 2)
+
     def test_eval_of_a_temp_program_is_still_a_pattern(self):
         result = analyze('eval "$(/tmp/.x/gen)"')
         self.assertIn("TEMP_PATH_IN_EXECUTION", result["patterns"])
@@ -84,6 +93,8 @@ class AttestedProgramResolution(unittest.TestCase):
         self.assertIsNone(self.audit._attested_program("zoxide"), "/usr/local is not a packaged location")
         self.assertIsNone(self.audit._attested_program("missing"))
         self.assertIsNone(self.audit._attested_program("/tmp/.x"))
+        self.assertIsNone(self.audit._attested_program("/usr/bin//dircolors"))
+        self.assertIsNone(self.audit._attested_program("/usr/bin/./dircolors"))
         self.assertIsNone(self.audit._attested_program(""))
         self.assertIsNone(self.audit._attested_program("onlyinbin"), "unreviewed generators cannot inherit package trust")
         self.assertIsNone(self.audit._attested_program("linked"), "a symlink is never taken, attested or not")          # :1157

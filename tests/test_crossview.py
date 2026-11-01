@@ -210,6 +210,20 @@ class LiveCrossView(unittest.TestCase):
         self.assertTrue(collectors._live_pid_probe(1))          # exists, not ours: EPERM
         self.assertFalse(collectors._live_pid_probe(2**22 - 1))  # near pid_max: almost surely free
 
+    def test_live_mounts_and_listeners_are_readable_without_following_symlinks(self):
+        """CV-1: /proc/self and /proc/net are symlinks; the no-follow reader must use /proc/<pid>."""
+        with patch("falsicore.collectors.os.geteuid", return_value=os.getuid()), \
+             patch("falsicore.collectors.os.getuid", return_value=os.getuid()):
+            audit = Audit("user", target_user=os.environ.get("USER") or "nobody")
+        audit.home = Path(tempfile.gettempdir())
+        self.assertEqual(audit._proc_self(), Path("/proc") / str(os.getpid()))
+        gaps, stats = collectors.Gaps(), {}
+        audit._proc_mount_overlays(gaps, stats)
+        self.assertIn("proc_pid_mounts", stats)
+        self.assertIsNotNone(audit._procnet_listeners())
+        self.assertEqual(dict(gaps.incomplete), {})
+        self.assertEqual(dict(gaps.limits), {})
+
     def test_live_sweep_finds_nothing_hidden_on_this_host(self):
         with patch("falsicore.collectors.os.geteuid", return_value=os.getuid()), \
              patch("falsicore.collectors.os.getuid", return_value=os.getuid()):

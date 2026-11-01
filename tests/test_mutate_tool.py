@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from tools import mutate
@@ -195,6 +196,42 @@ class Retry(unittest.TestCase):
         zero = [m for m in mutants if m.operator == "int:shift" and m.mutated == "0"]
         self.assertTrue(zero)
         self.assertTrue(all(m.status != "ANNOTATED" for m in zero))
+
+
+class FailClosedMutationExecution(unittest.TestCase):
+    def test_failed_manifest_generation_is_error_not_a_killed_mutant(self):
+        mutant = mutate.Mutant(
+            module="detectors", line=1, operator="int:shift",
+            original="VALUE = 1", mutated="0", mutant_id="detectors:1:1",
+            detail="VALUE = 0")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            target = root / "falsicore/detectors.py"
+            target.parent.mkdir()
+            target.write_text("VALUE = 1")
+            with patch.object(mutate.subprocess, "run", side_effect=[
+                SimpleNamespace(returncode=1), SimpleNamespace(returncode=0)
+            ]) as run:
+                result = mutate.run_mutant(
+                    mutant, {"test_x.Foo.test_value"}, root, sys.executable, timeout=1)
+            self.assertEqual(result.status, "ERROR")
+            self.assertEqual(result.detail, "RuntimeError")
+            self.assertEqual(target.read_text(), "VALUE = 1")
+            self.assertEqual(run.call_count, 2)
+
+    def test_timeout_is_never_a_success_even_in_measurement_mode(self):
+        row = {"module": "detectors", "line": 1, "operator": "compare",
+               "original": "x", "mutated": "y", "mutant_id": "x",
+               "status": "TIMEOUT", "tests": 1, "detail": "120s"}
+        report = {"modules": ["detectors"], "mutants": [row],
+                  "counts": {"TIMEOUT": 1}, "mutation_score": 0.0,
+                  "test_selection": True, "wall_clock_seconds": 0.0}
+        with patch.object(mutate, "run", return_value=report), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(mutate.main([
+                "--module", "detectors", "--allow-survivors"]), 1)
+        self.assertIn(("compare", "x", "y"),
+                      mutate.open_signatures(report)["detectors"])
 
 
 if __name__ == "__main__":

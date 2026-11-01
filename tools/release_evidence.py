@@ -74,21 +74,27 @@ def measure() -> dict:
                          "failed": int(failures.group(1)) if failures else 0, "errors": int(errors.group(1)) if errors else 0,
                          "skipped": int(skipped.group(1)) if skipped else 0, "seconds": seconds,
                          "test_files": len(list((ROOT / "tests").glob("test_*.py")))}
-    code, out, seconds = run([py, "-m", "coverage", "run", "--branch", "--source=falsicore", "-m", "unittest",
-                              "discover", "-s", "tests", "-q"])
     cov_json = ROOT / ".mutation" / "release-coverage.json"
     cov_json.parent.mkdir(exist_ok=True)
-    run([py, "-m", "coverage", "json", "-o", str(cov_json)], timeout=300)
+    # Never treat a stale JSON from an earlier run as current evidence.
+    cov_json.unlink(missing_ok=True)
+    (ROOT / ".coverage").unlink(missing_ok=True)
+    code, out, seconds = run([py, "-m", "coverage", "run", "--branch", "--source=falsicore", "-m", "unittest",
+                              "discover", "-s", "tests", "-q"])
+    json_exit, json_output, _ = run([py, "-m", "coverage", "json", "-o", str(cov_json)], timeout=300)
     try:
+        if code != 0 or json_exit != 0:
+            raise ValueError("coverage command did not complete successfully")
         totals = json.loads(cov_json.read_text())["totals"]
         evidence["coverage"] = {"scope": "falsicore/ runtime package, branch-aware, no exclusions",
                                 "num_statements": totals["num_statements"], "covered_lines": totals["covered_lines"],
                                 "missing_lines": totals["missing_lines"], "num_branches": totals["num_branches"],
                                 "covered_branches": totals["covered_branches"], "missing_branches": totals["missing_branches"],
-                                "percent_display": str(round(totals["percent_covered"])), "ci_gate_percent": 88,
+                                "percent_display": str(round(totals["percent_covered"])),
+                                "run_exit": code, "json_exit": json_exit, "ci_gate_percent": 88,
                                 "target_100_reached": totals["percent_covered"] >= 100, "tool": version_of("coverage")}
     except (OSError, KeyError, ValueError):
-        evidence["coverage"] = {"status": "NOT_MEASURED", "exit": code}
+        evidence["coverage"] = {"status": "NOT_MEASURED", "run_exit": code, "json_exit": json_exit}
     finally:
         cov_json.unlink(missing_ok=True)
         (ROOT / ".coverage").unlink(missing_ok=True)
@@ -135,13 +141,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="verify version and schema of the committed file")
     args = parser.parse_args(argv)
     if args.check:
-        committed = json.loads(OUT.read_text())
-        problems = [k for k, v in (("schema", SCHEMA), ("version", __version__)) if committed.get(k) != v]
-        if problems or committed.get("suite", {}).get("exit") != 0:
-            print(f"RELEASE_EVIDENCE.json is stale or red: {problems or 'suite exit'}", file=sys.stderr)
-            return 1
-        print("release evidence current")
-        return 0
+        # The original historical JSON lacks exact test/source/workflow
+        # fingerprints. Version and a green exit are insufficient for release
+        # assurance. For a current receipt use release_receipt.py --check.
+        print("HISTORICAL_ONLY: use tools/release_receipt.py --check --output RECEIPT.json",
+              file=sys.stderr)
+        return 1
     evidence = measure()
     OUT.write_text(json.dumps(evidence, indent=2, ensure_ascii=False) + "\n")
     print(f"written {OUT.relative_to(ROOT)}: suite exit {evidence['suite']['exit']}, "

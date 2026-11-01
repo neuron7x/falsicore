@@ -77,6 +77,10 @@ def defects(receipt: dict) -> list[str]:
                                             "missing_lines", "num_branches",
                                             "covered_branches", "missing_branches")]
         if (not all(type(v) is int and v >= 0 for v in values)
+                or type(coverage.get("run_exit")) is not int
+                or coverage["run_exit"] != 0
+                or type(coverage.get("json_exit")) is not int
+                or coverage["json_exit"] != 0
                 or values[0] <= 0 or values[3] <= 0
                 or values[1] + values[2] != values[0]
                 or values[4] + values[5] != values[3]

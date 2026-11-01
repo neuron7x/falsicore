@@ -19,7 +19,8 @@ class Gate(unittest.TestCase):
             "measurements": {
                 "suite": {"exit": 0, "ran": 900, "failed": 0, "errors": 0,
                           "test_files": len(list(c.glob("test_*.py")))},
-                "coverage": {"num_statements": 100, "covered_lines": 92,
+                "coverage": {"run_exit": 0, "json_exit": 0,
+                             "num_statements": 100, "covered_lines": 92,
                              "missing_lines": 8, "num_branches": 40,
                              "covered_branches": 38, "missing_branches": 2},
                 "static_analysis": {k: {"exit": 0} for k in g.REQUIRED_STATIC},
@@ -56,6 +57,17 @@ class Gate(unittest.TestCase):
                 data["measurements"]["detection_validity"]["passes"] = False
             with self.subTest(mode=mode):
                 self.assertTrue(self.defects(data))
+
+    def test_failing_coverage_command_cannot_be_covered_up_by_stale_json(self):
+        for field in ("run_exit", "json_exit"):
+            for bad in (None, False, 1):
+                with self.subTest(field=field, bad=bad):
+                    receipt = self.make()
+                    receipt["measurements"]["coverage"][field] = bad
+                    self.assertTrue(self.defects(receipt))
+            receipt = self.make()
+            receipt["measurements"]["coverage"].pop(field)
+            self.assertTrue(self.defects(receipt))
 
     def test_malformed_coverage_is_not_a_measurement(self):
         for bad in (None, {}, {"percent_display": "100"}):

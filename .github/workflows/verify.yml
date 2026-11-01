@@ -121,9 +121,17 @@ jobs:
             mutation-diff.md
           if-no-files-found: ignore
   static-analysis:
+    # Branch protection currently requires this job, not the separate
+    # evidence job. Make the required status fail whenever evidence does.
+    needs: evidence
+    if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
+      - name: Required evidence dependency must have succeeded
+        env:
+          EVIDENCE_JOB_RESULT: ${{ needs.evidence.result }}
+        run: test "$EVIDENCE_JOB_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

@@ -31,6 +31,20 @@ jobs:
           if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag) or tag != 'v'+__version__:
               raise SystemExit('Refusing release: tag and source version mismatch')
           PY
+      - name: Require a verified annotated release tag for exactly this source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_ref="$(gh api "repos/$GH_REPO/git/ref/tags/$GITHUB_REF_NAME")"
+          test "$(printf '%s' "$tag_ref" | jq -er '.object.type')" = tag
+          tag_sha="$(printf '%s' "$tag_ref" | jq -er '.object.sha')"
+          tag_info="$(gh api "repos/$GH_REPO/git/tags/$tag_sha")"
+          printf '%s' "$tag_info" | jq -e '.verification.verified == true and .object.type == "commit"'
+          test "$(printf '%s' "$tag_info" | jq -er '.tag')" = "$GITHUB_REF_NAME"
+          test "$(printf '%s' "$tag_info" | jq -er '.object.sha')" = "$(git rev-parse HEAD)"
       - name: Install required property and static analysis tools
         run: python -m pip install --disable-pip-version-check hypothesis==6.135.26 ruff==0.15.22 bandit==1.8.6 mypy==1.18.2
       - name: Test and audit

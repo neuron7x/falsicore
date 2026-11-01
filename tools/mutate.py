@@ -216,7 +216,7 @@ def generate(module: str, source: str, lines: set[int] | None = None) -> list[Mu
 
 # ---- retry ---------------------------------------------------------------------
 
-OPEN_STATUSES = ("SURVIVED", "NO_TESTS", "ERROR", "NOT_RUN")
+OPEN_STATUSES = ("SURVIVED", "NO_TESTS", "ERROR", "NOT_RUN", "TIMEOUT")
 Signature = tuple[str, str, str]
 
 
@@ -317,8 +317,11 @@ def run_mutant(mutant: Mutant, tests: set[str] | None, workdir: Path, python: st
         mutant.detail = ""
         # Test ids from coverage contexts are relative to tests/ (unittest discover -s tests).
         env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "FALSICORE_PBT_EXAMPLES": "30", "PYTHONPATH": "tests"}
-        subprocess.run([python, "-B", "tools/build_release.py", "--write-manifest"], cwd=str(workdir), env=env,
-                       capture_output=True, timeout=120)
+        manifest_write = subprocess.run(
+            [python, "-B", "tools/build_release.py", "--write-manifest"],
+            cwd=str(workdir), env=env, capture_output=True, timeout=120)
+        if manifest_write.returncode != 0:
+            raise RuntimeError("mutated manifest regeneration failed")
         if tests:
             argv = [python, "-B", "-m", "unittest", "-f", "-q", *sorted(tests)]
             mutant.tests = len(tests)
@@ -335,12 +338,18 @@ def run_mutant(mutant: Mutant, tests: set[str] | None, workdir: Path, python: st
                 mutant.detail = failing[0] if failing else proc.stderr.strip().splitlines()[-1][:160] if proc.stderr.strip() else ""
         except subprocess.TimeoutExpired:
             mutant.status, mutant.detail = "TIMEOUT", f"{timeout:.0f}s"
-    except (OSError, SyntaxError) as exc:
+    except (OSError, SyntaxError, RuntimeError, subprocess.TimeoutExpired) as exc:
         mutant.status, mutant.detail = "ERROR", type(exc).__name__
     finally:
-        target.write_text(original)
-        subprocess.run([python, "-B", "tools/build_release.py", "--write-manifest"], cwd=str(workdir),
-                       capture_output=True, timeout=120)
+        try:
+            target.write_text(original)
+            restore = subprocess.run(
+                [python, "-B", "tools/build_release.py", "--write-manifest"],
+                cwd=str(workdir), capture_output=True, timeout=120)
+            if restore.returncode != 0:
+                mutant.status, mutant.detail = "ERROR", "manifest restoration failed"
+        except (OSError, subprocess.TimeoutExpired):
+            mutant.status, mutant.detail = "ERROR", "tree restoration failed"
     mutant.seconds = round(time.monotonic() - started, 2)
     return mutant
 
@@ -416,7 +425,7 @@ def run(modules: dict[str, set[int] | None], workers: int, timeout: float, pytho
         "operators": sorted({m.operator.split(":")[0] for m in results}),
         "modules": sorted(modules), "counts": counts, "mutation_score": None if score is None else round(score, 4),
         "mutants": [asdict(m) for m in results],
-        "interpretation": "KILLED: a test failed. TIMEOUT: the suite hung (noticed, not open). SURVIVED: no test noticed. NO_TESTS: no test executes the line. "
+        "interpretation": "KILLED: a test failed. TIMEOUT: an incomplete measurement and release blocker. SURVIVED: no test noticed. NO_TESTS: no test executes the line. "
                           "No line-wide annotation exemptions are applied. Survivors remain open until "
                           "tested or individually proven equivalent.",
     }
@@ -484,11 +493,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.markdown:
         args.markdown.write_text(markdown(result))
     print(markdown(result), end="")
-    # A mutant that hangs the suite was noticed (the run did not finish): it is
-    # reported but is not an open item. Survivors, untested lines and errors are.
-    # --allow-survivors is a measurement mode, never permission to accept
-    # errors, unfinished budgets, or a changed semantic file with no mutants.
-    incomplete = sum(result["counts"].get(k, 0) for k in ("ERROR", "NOT_RUN", "ANNOTATED"))
+    # A hanging test suite may reflect infrastructure failure or a real fault;
+    # it is neither a verified kill nor permission to release. Fail closed.
+    # --allow-survivors only permits exploratory survivor measurements.
+    incomplete = sum(result["counts"].get(k, 0) for k in ("ERROR", "NOT_RUN", "ANNOTATED", "TIMEOUT"))
     open_items = sum(result["counts"].get(k, 0) for k in ("SURVIVED", "NO_TESTS"))
     no_selection = bool(args.diff and modules and not result["mutants"])
     if no_selection:

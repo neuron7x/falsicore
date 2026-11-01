@@ -320,25 +320,40 @@ def _ss_listener_endpoints(output: str) -> set[tuple[str, str, int]] | None:
         result.add((fields[0].rstrip("6") + family, str(host), port))
     return result
 
-def _proc_mount_has_hidepid(raw: bytes) -> bool:
-    """Inspect mountinfo mount and superblock options for procfs hiding.
+def _proc_mount_has_hidepid(raw: bytes) -> bool | None:
+    """Return True (restricted), False (verified unrestricted), or None (unknown).
 
-    Linux mountinfo stores filesystem-specific options after the ' - '
-    separator; looking only at field 6 silently misses that case.
+    The kernel's mountinfo format requires mount options, the '-' separator,
+    filesystem type and superblock options. An absent/malformed procfs record
+    cannot prove a user has unrestricted process-list visibility.
     """
+    if not raw or b"\x00" in raw:
+        return None
+    seen_proc = False
     for line in raw.decode("utf-8", "replace").splitlines():
         fields = line.split()
-        if len(fields) < 6 or fields[4] != "/proc":
+        if not fields:
             continue
-        options = fields[5].split(",")
-        if "-" in fields:
-            dash = fields.index("-")
-            if len(fields) > dash + 3:
-                options.extend(fields[dash + 3].split(","))
-        if any(re.fullmatch(r"hidepid=(?:1|2|invisible|ptraceable)", opt)
-               for opt in options):
-            return True
-    return False
+        if len(fields) < 5:
+            return None
+        if fields[4] != "/proc":
+            continue
+        seen_proc = True
+        if len(fields) < 10 or "-" not in fields:
+            return None
+        dash = fields.index("-")
+        if dash < 6 or len(fields) != dash + 4 or fields[dash + 1] != "proc":
+            return None
+        options = fields[5].split(",") + fields[dash + 3].split(",")
+        for option in options:
+            if not option.startswith("hidepid="):
+                continue
+            mode = option.partition("=")[2]
+            if mode in ("1", "2", "4", "invisible", "ptraceable"):
+                return True
+            if mode != "0":
+                return None
+    return False if seen_proc else None
 
 
 class Audit:
@@ -2172,7 +2187,13 @@ class Audit:
                 stats["processes"] = {"status": "MOUNT_VISIBILITY_UNAVAILABLE",
                                       "hidden": 0, "pid_max_probed": 0}
                 return
-            if _proc_mount_has_hidepid(mounts):
+            mount_policy = _proc_mount_has_hidepid(mounts)
+            if mount_policy is None:
+                gaps.add("PARSE_UNSUPPORTED")
+                stats["processes"] = {"status": "PROC_MOUNT_POLICY_UNDETERMINED",
+                                      "hidden": 0, "pid_max_probed": 0}
+                return
+            if mount_policy:
                 gaps.add("OTHER_ACCOUNTS_NOT_VISIBLE")
                 stats["processes"] = {"status": "HIDEPID_RESTRICTED", "hidden": 0, "pid_max_probed": 0}
                 return

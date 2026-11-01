@@ -364,9 +364,12 @@ class CrossViewFixture(unittest.TestCase):
         self.assertIs(collectors._proc_mount_has_hidepid(two_mounts), True)
         self.assertIs(collectors._proc_mount_has_hidepid(
             b"22 1 0:21 / /proc rw - proc proc rw\n"), False)
-        # A truncated superblock is not an excuse for an uncaught IndexError.
-        self.assertIs(collectors._proc_mount_has_hidepid(
-            b"22 1 0:21 / /proc rw - proc proc\n"), False)
+        # A truncated procfs superblock has an UNKNOWN policy, not proof of
+        # unrestricted visibility for negative-inference PID sweeps.
+        self.assertIsNone(collectors._proc_mount_has_hidepid(
+            b"22 1 0:21 / /proc rw - proc proc\n"))
+        self.assertIsNone(collectors._proc_mount_has_hidepid(
+            b"21 1 0:20 / /run rw - tmpfs tmpfs rw\n"))
 
     def test_candidate_confirmation_cap_has_an_exact_boundary(self):
         # FC-23: 200 candidates fit; 201 requires one explicitly unexamined

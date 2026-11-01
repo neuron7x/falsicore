@@ -87,7 +87,7 @@ class ProcMountVisibility(unittest.TestCase):
     def test_other_mount_options_cannot_fake_proc_hidepid(self):
         self.assertFalse(collectors._proc_mount_has_hidepid(
             b"22 1 0:21 / /proc rw - proc proc rw,hidepid=0\n"))
-        self.assertFalse(collectors._proc_mount_has_hidepid(
+        self.assertIsNone(collectors._proc_mount_has_hidepid(
             b"22 1 0:21 / /tmp rw,hidepid=2 - tmpfs tmpfs rw\n"))
 
     def test_hidepid_is_a_scope_limit_with_zero_claimed_hidden_pids(self):
@@ -97,11 +97,32 @@ class ProcMountVisibility(unittest.TestCase):
         self.assertEqual(stats["processes"], {
             "status": "HIDEPID_RESTRICTED", "hidden": 0, "pid_max_probed": 0})
 
-    def test_mountinfo_five_field_boundary_is_not_indexed_as_six_fields(self):
+    def test_truncated_proc_mount_record_is_unknown_not_unrestricted(self):
         self.mount.write_text("22 1 0:21 / /proc\n")
         gaps, stats = self.measure()
-        self.assertEqual(dict(gaps.incomplete), {})
-        self.assertEqual(stats["processes"]["pid_max_probed"], 1)
+        self.assertEqual(gaps.incomplete["PARSE_UNSUPPORTED"], 1)
+        self.assertEqual(stats["processes"]["status"], "PROC_MOUNT_POLICY_UNDETERMINED")
+        self.assertEqual(stats["processes"]["hidden"], 0)
+        self.assertEqual(stats["processes"]["pid_max_probed"], 0)
+
+    def test_missing_proc_mount_is_unknown_not_an_empty_scope(self):
+        self.mount.write_text("22 1 0:21 / /tmp rw - tmpfs tmpfs rw\n")
+        gaps, stats = self.measure()
+        self.assertEqual(gaps.incomplete["PARSE_UNSUPPORTED"], 1)
+        self.assertEqual(stats["processes"]["status"], "PROC_MOUNT_POLICY_UNDETERMINED")
+        self.assertEqual(stats["processes"]["hidden"], 0)
+
+    def test_unknown_hidepid_value_requires_explicit_limitation(self):
+        self.mount.write_text("22 1 0:21 / /proc rw - proc proc rw,hidepid=experimental\n")
+        gaps, stats = self.measure()
+        self.assertEqual(gaps.incomplete["PARSE_UNSUPPORTED"], 1)
+        self.assertEqual(stats["processes"]["status"], "PROC_MOUNT_POLICY_UNDETERMINED")
+
+    def test_hidepid_4_is_a_scope_limit(self):
+        self.mount.write_text("22 1 0:21 / /proc rw - proc proc rw,hidepid=4\n")
+        gaps, stats = self.measure()
+        self.assertEqual(gaps.limits["OTHER_ACCOUNTS_NOT_VISIBLE"], 1)
+        self.assertEqual(stats["processes"]["status"], "HIDEPID_RESTRICTED")
 
     def test_truncated_mountinfo_prevents_untrusted_pid_negative_inference(self):
         self.mount.write_bytes(b"x" * (4 * 1024 * 1024 + 1))

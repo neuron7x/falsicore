@@ -86,6 +86,7 @@ class ApkReferenceCompleteness(unittest.TestCase):
         self.assertEqual(row["status"], "PARTIAL")
         self.assertIn("READ_FAILED", row["reason_codes"])
         self.assertEqual(review["files_checked"], 0)
+        self.assertFalse(review["truncated"], "unreadable index is not parsed-index truncation")
 
     def test_disappeared_installed_index_cannot_be_a_clean_verification(self):
         # The manager was selected before the database vanished (TOCTOU).
@@ -93,6 +94,7 @@ class ApkReferenceCompleteness(unittest.TestCase):
         self.assertEqual(row["status"], "PARTIAL")
         self.assertIn("READ_FAILED", row["reason_codes"])
         self.assertEqual(review["records"], 0)
+        self.assertFalse(review["truncated"], "missing index is not parsed-index truncation")
 
 
 if __name__ == "__main__":

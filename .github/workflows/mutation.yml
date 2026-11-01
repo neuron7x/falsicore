@@ -3,16 +3,31 @@ on:
   schedule:
     - cron: '41 3 * * 2'   # weekly whole-package mutation run on main
   workflow_dispatch:
+  pull_request:
+    types: [synchronize]  # PR #19 only, gated below; exact-source pre-merge assay
 permissions:
   contents: read
+env:
+  FALSICORE_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+concurrency:
+  group: mutation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   whole-package:
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.number == 19 && github.event.pull_request.head.ref == 'assurance/verification-foundation-2026-11') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert immutable checkout of the target HEAD
+        run: test "$(git rev-parse HEAD)" = "$FALSICORE_EXPECTED_HEAD_SHA"
+      - name: Refuse missing or outdated source fingerprints
+        run: |
+          sha256sum -c SOURCE_MANIFEST.sha256
+          python tools/build_release.py --check-manifest
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
@@ -25,7 +40,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: mutation-${{ github.sha }}
+          name: mutation-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             mutation.json
             mutation.md

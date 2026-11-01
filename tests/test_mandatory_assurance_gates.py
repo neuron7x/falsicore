@@ -43,6 +43,18 @@ class MandatoryAssuranceGates(unittest.TestCase):
         self.assertIn("if: always()", artifact)
         self.assertIn("if-no-files-found: error", artifact)
 
+    def test_pr19_whole_package_mutation_runs_on_exact_head_without_tag(self):
+        # Original manual/scheduled-only workflow cannot measure a pre-merge PR SHA.
+        workflow = (ROOT / ".github/workflows/mutation.yml").read_text()
+        self.assertIn("  pull_request:\n    types: [synchronize]", workflow)
+        self.assertIn("github.event.pull_request.number == 19", workflow)
+        self.assertIn("github.event.pull_request.head.ref == 'assurance/verification-foundation-2026-11'", workflow)
+        self.assertIn("ref: ${{ github.event.pull_request.head.sha || github.sha }}", workflow)
+        self.assertIn('test "$(git rev-parse HEAD)" = "$FALSICORE_EXPECTED_HEAD_SHA"', workflow)
+        self.assertIn("sha256sum -c SOURCE_MANIFEST.sha256", workflow)
+        self.assertIn("python tools/build_release.py --check-manifest", workflow)
+        self.assertIn("name: mutation-${{ github.event.pull_request.head.sha || github.sha }}", workflow)
+
     def test_source_act_and_registry_falsifiers_run_before_artifact_build(self):
         workflow = (ROOT / ".github/workflows/verify.yml").read_text()
         release = (ROOT / ".github/workflows/release.yml").read_text()

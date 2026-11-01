@@ -2206,11 +2206,30 @@ class Audit:
                                   "hidden": 0, "pid_max_probed": 0}
             return
         listed, tids = initial_listing
-        raw, _ = safe_read(self.proc_root / "sys/kernel/pid_max", 64)
+        pid_max_path = self.proc_root / "sys/kernel/pid_max"
+        raw, status = safe_read(pid_max_path, 64)
+        if raw is None:
+            # An unknown PID upper bound cannot certify a complete sweep.
+            # An absent or unreadable bound is incomplete even when the
+            # read error is otherwise reported as a scope limitation.
+            self.read_gap(pid_max_path, status, gaps)
+            gaps.add("READ_FAILED")
+            stats["processes"] = {"status": "PID_MAX_UNAVAILABLE",
+                                  "hidden": 0, "pid_max_probed": 0}
+            return
         try:
-            pid_max = min(int(raw.decode("ascii", "replace").strip()), PID_SWEEP_MAX) if raw else 32768
-        except ValueError:
-            pid_max = 32768
+            pid_max = int(raw.decode("ascii").strip())
+        except (UnicodeDecodeError, ValueError):
+            pid_max = 0
+        if pid_max < 1:
+            gaps.add("MALFORMED_INPUT")
+            stats["processes"] = {"status": "PID_MAX_INVALID",
+                                  "hidden": 0, "pid_max_probed": 0}
+            return
+        if pid_max > PID_SWEEP_MAX:
+            # The unprobed tail remains a declared coverage gap.
+            gaps.add("ENUMERATION_LIMIT", pid_max - PID_SWEEP_MAX)
+            pid_max = PID_SWEEP_MAX
         probed = 0
         candidates: list[int] = []
         for pid in range(1, pid_max + 1):

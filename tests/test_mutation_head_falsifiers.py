@@ -128,6 +128,43 @@ class ProcVisibilityResultCounters(unittest.TestCase):
         self.assertNotIn("ENUMERATION_LIMIT", gaps.incomplete)
 
 
+    def test_missing_pid_max_does_not_fabricate_complete_sweep(self):
+        self.mount.write_bytes(ProcMountAdversarialFormat.VALID)
+        self.pid_max.unlink()
+        self.audit.pid_probe = lambda _pid: self.fail("unknown PID bound must not be probed")
+        gaps, result = self.measure()
+        self.assertEqual(result, {
+            "status": "PID_MAX_UNAVAILABLE", "hidden": 0, "pid_max_probed": 0})
+        self.assertGreater(gaps.incomplete["READ_FAILED"], 0)
+
+    def test_invalid_pid_max_cannot_certify_pid_absence(self):
+        self.mount.write_bytes(ProcMountAdversarialFormat.VALID)
+        self.audit.pid_probe = lambda _pid: self.fail("invalid PID bound must not be probed")
+        for content in (b"not-a-number", b"0", b"-1", b"", bytes([255])):
+            with self.subTest(content=content):
+                self.pid_max.write_bytes(content)
+                gaps, result = self.measure()
+                self.assertEqual(result, {
+                    "status": "PID_MAX_INVALID", "hidden": 0, "pid_max_probed": 0})
+                self.assertGreater(gaps.incomplete["MALFORMED_INPUT"], 0)
+
+    def test_valid_pid_max_counts_actual_probes_without_gap(self):
+        self.mount.write_bytes(ProcMountAdversarialFormat.VALID)
+        self.pid_max.write_text("3")
+        gaps, result = self.measure()
+        self.assertEqual(result["pid_max_probed"], 3)
+        self.assertEqual(result["hidden"], 0)
+        self.assertFalse(gaps.incomplete)
+
+    def test_pid_bound_above_sweep_cap_exposes_unprobed_range(self):
+        self.mount.write_bytes(ProcMountAdversarialFormat.VALID)
+        self.pid_max.write_text("3")
+        with patch.object(collectors, "PID_SWEEP_MAX", 2):
+            gaps, result = self.measure()
+        self.assertEqual(result["pid_max_probed"], 2)
+        self.assertEqual(gaps.incomplete["ENUMERATION_LIMIT"], 1)
+
+
 class LexicalRecursionBudget(unittest.TestCase):
     def test_balanced_default_nesting_budget_has_a_strict_boundary(self):
         # Alternating double quotes and command substitutions cost two levels

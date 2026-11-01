@@ -36,6 +36,13 @@ class AnalyserReportsEvaluatedPrograms(unittest.TestCase):
         mixed = analyze('eval "$(dircolors -b)"\n$CMD --x\n')
         self.assertEqual((mixed["evaluated_programs"], mixed["unresolved_expansions"]), (["dircolors"], 2))
 
+    def test_nested_runs_propagate_programs_and_counts(self):          # shell_syntax:495/496
+        nested = analyze('bash -c \'eval "$(dircolors -b)"\'')
+        self.assertEqual((nested["evaluated_programs"], nested["unresolved_expansions"]), (["dircolors"], 1))
+        counted = analyze("sh -c '$CMD --x'\n$OTHER\n")
+        self.assertEqual(counted["unresolved_expansions"], 2)
+        self.assertEqual(counted["evaluated_programs"], [])
+
     def test_eval_of_a_temp_program_is_still_a_pattern(self):
         result = analyze('eval "$(/tmp/.x/gen)"')
         self.assertIn("TEMP_PATH_IN_EXECUTION", result["patterns"])
@@ -53,12 +60,16 @@ class AttestedProgramResolution(unittest.TestCase):
         for name in ("dircolors", "lesspipe", "cat", "starship"):
             (self.root / "usr/bin" / name).write_text("#!/bin/sh\n")
         (self.root / "usr/local/bin/zoxide").write_text("#!/bin/sh\n")
+        (self.root / "bin").mkdir()
+        (self.root / "bin/onlyinbin").write_text("#!/bin/sh\n")
+        (self.root / "usr/bin/linked").symlink_to(self.root / "usr/bin/dircolors")
         pw = SimpleNamespace(pw_uid=UID, pw_dir=str(self.root / "home/fixture"), pw_name="fixture")
         with patch("falsicore.collectors.pwd.getpwnam", return_value=pw), \
              patch("falsicore.collectors.os.geteuid", return_value=UID), \
              patch("falsicore.collectors.os.getuid", return_value=UID):
             self.audit = Audit("user", target_user="fixture", root=self.root)
-        self.attested = {self.root / "usr/bin/dircolors", self.root / "usr/bin/lesspipe", self.root / "usr/bin/cat"}
+        self.attested = {self.root / "usr/bin/dircolors", self.root / "usr/bin/lesspipe", self.root / "usr/bin/cat",
+                         self.root / "bin/onlyinbin", self.root / "usr/bin/linked", self.root / "home/fixture/.vendor.sh"}
         self.audit.package_attested = lambda path, content: path in self.attested  # type: ignore[method-assign]
         self.audit.command = lambda *a, **k: {"status": "FAILED", "stdout": "", "stderr": "no crontab for fixture",
                                              "exit": 1, "elapsed_ms": 0, "truncated": False, "error": ""}
@@ -72,6 +83,8 @@ class AttestedProgramResolution(unittest.TestCase):
         self.assertIsNone(self.audit._attested_program("missing"))
         self.assertIsNone(self.audit._attested_program("/tmp/.x"))
         self.assertIsNone(self.audit._attested_program(""))
+        self.assertEqual(self.audit._attested_program("onlyinbin"), self.root / "bin/onlyinbin", "later directories are searched")  # :1158
+        self.assertIsNone(self.audit._attested_program("linked"), "a symlink is never taken, attested or not")          # :1157
 
     def decide(self, text: str) -> Gaps:
         gaps = Gaps()
@@ -90,6 +103,25 @@ class AttestedProgramResolution(unittest.TestCase):
             self.assertEqual(dict(gaps.incomplete), {"PARSE_UNSUPPORTED": 1}, text)
             self.assertEqual(dict(gaps.limits), {}, text)
         self.assertEqual((dict(self.decide("echo ok\n").incomplete), dict(self.decide("echo ok\n").limits)), ({}, {}))
+
+    def test_attested_file_content_decides_package_attestation(self):   # collectors:1177/1178
+        vendor = self.root / "home/fixture/.vendor.sh"
+        vendor.write_text("$CMD --x\n")
+        analysis = analyze(vendor.read_text())
+        gaps = Gaps()
+        self.audit._shell_limit(analysis, vendor, vendor.read_bytes(), gaps)
+        self.assertEqual((dict(gaps.incomplete), dict(gaps.limits)), ({}, {"PACKAGE_ATTESTED_NOT_PARSED": 1}))
+        gaps = Gaps()
+        self.audit._shell_limit(analysis, vendor, None, gaps)           # no content given: attestation is not assumed
+        self.assertEqual(dict(gaps.incomplete), {"PARSE_UNSUPPORTED": 1})
+
+    def test_crontab_limitations_are_classified_too(self):              # collectors:1310
+        self.audit.command = lambda *a, **k: {"status": "COMPLETED", "stdout": "@reboot $HOME/bin/x\n", "stderr": "",
+                                             "exit": 0, "elapsed_ms": 0, "truncated": False, "error": ""}
+        self.audit.persistence()
+        row = next(c for c in self.audit.coverage if c["check"] == "persistence")
+        self.assertEqual(row["reason_codes"].get("PARSE_UNSUPPORTED"), 1)
+        self.assertIn("crontab://target-user", {self.audit.private_index.get(e["source_ref"]) for e in self.audit.stats["shell_analysis_limits"]})
 
     def test_stock_startup_file_leaves_persistence_complete_and_the_verdict_reachable(self):
         home = self.root / "home/fixture"

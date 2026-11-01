@@ -28,6 +28,8 @@ KEYWORDS_DATA = {"case", "for", "select", "function", "in"}
 KEYWORDS_END = {"fi", "done", "esac", "}"}
 TRANSPARENT = {"then", "do", "else", "elif", "if", "while", "until", "!", "{", "command", "builtin",
                "nohup", "setsid", "exec", "time"}
+# Reserved words are transparent only as bare words: "/tmp/if" is a program called "if".
+RESERVED_TRANSPARENT = {"then", "do", "else", "elif", "if", "while", "until", "!", "{"}
 ASSIGN_BUILTINS = {"export", "declare", "local", "readonly", "typeset"}
 REDIRECTS = {"<", ">", ">>", "<&", ">&", "<>", "&>", "&>>", ">|", "<<<"}
 SEPARATORS = {";", "&", "&&", "||", ";;", ";&", ";;&", "(", ")", "\n"}
@@ -442,7 +444,9 @@ def _head(words: list[Word], analyse_value) -> list[Word]:
             analyse_value(assign.group(1), assign.group(2), first)
             words = words[1:]
             continue
-        if name in TRANSPARENT:
+        if _temporary(first.text):
+            break                      # a wrapper that itself lives in a volatile path is the program to report (P-10)
+        if name in TRANSPARENT and (first.text == name or name not in RESERVED_TRANSPARENT):
             words = words[1:]
         elif name in ("sudo", "doas"):
             words = _strip_options(words[1:], {"-u", "-g", "-h", "-C", "-p", "-r", "-t", "--user", "--group"})

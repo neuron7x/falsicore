@@ -108,8 +108,12 @@ class P5_KeywordNamedProgram(unittest.TestCase):
     """A program whose basename is a shell reserved word escaped the volatile-path rule."""
 
     def test_volatile_program_named_like_a_keyword_is_flagged(self):
-        for name in ("in", "done", "fi", "esac", "case", "for", "function"):
+        for name in ("in", "done", "fi", "esac", "case", "for", "function",
+                     "if", "then", "else", "do", "while", "until", "!", "{",          # P-10: transparent reserved words
+                     "nohup", "exec", "time", "command", "setsid", "builtin"):      # P-10: wrappers living in /tmp
             self.assertIn("TEMP_PATH_IN_EXECUTION", analyze(f"/tmp/{name} --arg")["patterns"], name)
+        self.assertIn("TEMP_PATH_IN_EXECUTION", analyze("nohup /tmp/x")["patterns"])   # a bare wrapper is still transparent
+        self.assertEqual(analyze("if true; then nohup true; fi")["patterns"], [])
 
     def test_bare_keywords_are_still_not_commands(self):
         script = "if true; then\n  echo x\nfi\nfor i in 1 2; do :; done\n"

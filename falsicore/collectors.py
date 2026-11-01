@@ -146,6 +146,8 @@ VERIFY_PREFIXES = ("/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/", "/usr/libexec/"
 VERIFY_MAX_FILES = 20000
 VERIFY_MAX_BYTES = 512 * 1024 * 1024
 VERIFY_MAX_FILE_BYTES = 8 * 1024 * 1024   # safe_read's own ceiling; larger files count as unverifiable
+DPKG_DB_MAX_RECORDS = 20000
+DPKG_DB_MAX_BYTES = 128 * 1024 * 1024
 PACKAGE_DB_MAX_RECORDS = 20000
 PACKAGE_DB_MAX_BYTES = 128 * 1024 * 1024
 MTREE_MAX_COMPRESSED = 8 * 1024 * 1024
@@ -311,6 +313,7 @@ class Audit:
         self._dpkg_index: dict[str, str] | None = None
         self._pacman_index: dict[str, tuple[str, str]] | None = None
         self._apk_index: dict[str, tuple[str, str]] | None = None
+        self._package_db_gaps: dict[str, Counter[str]] = {}
         boot, _ = safe_read(self.proc_root / "sys/kernel/random/boot_id", 64)
         self.boot_id = boot.decode("ascii", "replace").strip() if boot else "UNAVAILABLE"
         self.incident_at = None
@@ -1014,6 +1017,13 @@ class Audit:
                 gaps.add("READ_FAILED")
         return out, incomplete
 
+    def _package_db_gap(self, manager: str, reason: str, omitted: int = 1) -> None:
+        if reason not in INCOMPLETE_CODES:
+            raise ValueError("Package database failure must be an incompleteness code")
+        if not hasattr(self, "_package_db_gaps"):
+            self._package_db_gaps = {}
+        self._package_db_gaps.setdefault(manager, Counter())[reason] += omitted
+
     def _dpkg_md5(self, path: Path) -> str | None:
         """md5 recorded by dpkg for an installed file, from a lazily built index."""
         if self._dpkg_index is None:
@@ -1022,20 +1032,29 @@ class Audit:
             try:
                 lists = sorted(self.sys("/var/lib/dpkg/info").glob("*.md5sums"))
             except OSError:
+                self._package_db_gap("dpkg", "READ_FAILED")
                 lists = []
-            for md5file in lists[:20000]:
-                raw, _ = safe_read(md5file, 4 * 1024 * 1024)
+            if len(lists) > DPKG_DB_MAX_RECORDS:
+                self._package_db_gap("dpkg", "ENUMERATION_LIMIT", len(lists) - DPKG_DB_MAX_RECORDS)
+            for offset, md5file in enumerate(lists[:DPKG_DB_MAX_RECORDS]):
+                raw, read_status = safe_read(md5file, 4 * 1024 * 1024)
                 if raw is None:
+                    self._package_db_gap("dpkg", "INPUT_TRUNCATED" if read_status == "TOO_LARGE" else "READ_FAILED")
                     continue
                 total += len(raw)
-                if total > 128 * 1024 * 1024:
+                if total > DPKG_DB_MAX_BYTES:
+                    self._package_db_gap("dpkg", "ENUMERATION_LIMIT", len(lists) - offset)
                     break
                 for line in raw.decode("utf-8", "replace").splitlines():
                     digest, _, rel = line.partition("  ")
-                    if len(digest) == 32 and rel:
+                    if len(digest) == 32 and re.fullmatch(r"[0-9a-fA-F]{32}", digest) and rel:
                         index["/" + rel] = digest
+                    elif line.strip():
+                        self._package_db_gap("dpkg", "MALFORMED_INPUT")
             # Conffiles (/etc/...) are not in *.md5sums; dpkg records them in status.
-            raw, _ = safe_read(self.sys("/var/lib/dpkg/status"), 8 * 1024 * 1024)
+            raw, read_status = safe_read(self.sys("/var/lib/dpkg/status"), 8 * 1024 * 1024)
+            if raw is None:
+                self._package_db_gap("dpkg", "INPUT_TRUNCATED" if read_status == "TOO_LARGE" else "READ_FAILED")
             if raw is not None:
                 for m in re.finditer(r"^ (/\S+) ([0-9a-f]{32})(?: obsolete)?$", raw.decode("utf-8", "replace"), re.M):
                     index.setdefault(m.group(1), m.group(2))
@@ -1062,16 +1081,23 @@ class Audit:
             try:
                 folders = sorted(p for p in local.iterdir() if p.is_dir() and not p.is_symlink())
             except OSError:
+                self._package_db_gap("pacman", "READ_FAILED")
                 folders = []
             total = 0
-            for folder in folders[:PACKAGE_DB_MAX_RECORDS]:
+            if len(folders) > PACKAGE_DB_MAX_RECORDS:
+                self._package_db_gap("pacman", "ENUMERATION_LIMIT", len(folders) - PACKAGE_DB_MAX_RECORDS)
+            for offset, folder in enumerate(folders[:PACKAGE_DB_MAX_RECORDS]):
                 data = self._read_mtree(folder / "mtree")
                 if data is None:
+                    self._package_db_gap("pacman", "PARSE_UNSUPPORTED")
                     continue
                 total += len(data)
                 if total > PACKAGE_DB_MAX_BYTES:
+                    self._package_db_gap("pacman", "ENUMERATION_LIMIT", len(folders) - offset)
                     break
-                entries, _ = pk.parse_pacman_mtree(data)
+                entries, parsed = pk.parse_pacman_mtree(data)
+                if parsed.get("malformed", 0):
+                    self._package_db_gap("pacman", "MALFORMED_INPUT", parsed["malformed"])
                 for rel, attrs in entries.items():
                     if attrs.get("type") == "file" and rel not in pk.PACMAN_METADATA_ENTRIES:
                         if "sha256" in attrs:
@@ -2443,6 +2469,12 @@ class Audit:
         else:
             gaps.add("NOT_IN_PROFILE")
             detail = "Package source trust settings and selected package metadata; integrity verification runs only in the deep profile"
+        if self.profile == "deep":
+            for manager, counts in self._package_db_gaps.items():
+                if manager in managers:
+                    integrity.setdefault(manager, {})["reference_db_omissions"] = dict(sorted(counts.items()))
+                    for code, count in counts.items():
+                        gaps.add(code, count)
         self.stats["repos"] = {"source_files_checked": len(repos), "insecure_source_files": insecure_repo_files}
         self.conclude("packages", detail, gaps, len(repos))
 

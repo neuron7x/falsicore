@@ -65,5 +65,21 @@ class MandatoryAssuranceGates(unittest.TestCase):
         self.assertIn('test "$(printf', workflow)
 
 
+    def test_tagged_release_publish_is_blocked_without_strict_whole_package_mutation(self):
+        release = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertIn("  mutation-assurance:\n", release)
+        mutation = release.split("  mutation-assurance:\n", 1)[1].split("  publish:\n", 1)[0]
+        publish = release.split("  publish:\n", 1)[1]
+        self.assertIn("needs: build", mutation)
+        self.assertIn('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"', mutation)
+        self.assertIn("sha256sum -c SOURCE_MANIFEST.sha256", mutation)
+        self.assertIn("python tools/mutate.py --coverage", mutation)
+        self.assertIn("tools/mutate.py --all --workers 4 --timeout 120 --budget 15000", mutation)
+        self.assertNotIn("--allow-survivors", mutation)
+        self.assertIn("if: always()", mutation)
+        self.assertIn("if-no-files-found: error", mutation)
+        self.assertIn("needs: [build, mutation-assurance]", publish)
+
+
 if __name__ == "__main__":
     unittest.main()

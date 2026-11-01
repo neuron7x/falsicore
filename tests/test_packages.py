@@ -579,97 +579,101 @@ class RepoSettingsTests(unittest.TestCase):
         self.assertEqual(p.detect_insecure_repo_settings("dnf", text), ["DNF_GPGCHECK_OFF"])
 
 
-@unittest.skipUnless(HAVE_HYPOTHESIS, "hypothesis not installed")
-class PackageParserProperties(unittest.TestCase):
-    """Totality, closed vocabularies and conservation laws over arbitrary input."""
+if HAVE_HYPOTHESIS:
+    # Strategy names exist only when Hypothesis imported; the classes live inside the guard
+    # so the module (and the packaged self-test) imports cleanly without it.
+    @unittest.skipUnless(HAVE_HYPOTHESIS, "hypothesis not installed")
+    class PackageParserProperties(unittest.TestCase):
+        """Totality, closed vocabularies and conservation laws over arbitrary input."""
 
-    @given(any_bytes)
-    def test_mtree_total_and_keys_closed(self, raw):
-        entries, stats = p.parse_pacman_mtree(raw)
-        self.assertEqual(set(stats), {"lines", "malformed", "truncated"})
-        self.assertLessEqual(stats["malformed"], stats["lines"])
-        self.assertLessEqual(stats["lines"], p.MTREE_MAX_LINES)
-        self.assertFalse(stats["truncated"])
-        self.assertLessEqual(len(entries), stats["lines"])
-        for path, attrs in entries.items():
-            self.assertTrue(path.startswith("/"), path)
-            self.assertTrue(set(attrs) <= p.MTREE_KEYS, attrs)
-            if "type" in attrs:
-                self.assertIn(attrs["type"], p.MTREE_TYPES)
-            if "mode" in attrs:
-                self.assertTrue(0 <= attrs["mode"] <= 0o7777)
+        @given(any_bytes)
+        def test_mtree_total_and_keys_closed(self, raw):
+            entries, stats = p.parse_pacman_mtree(raw)
+            self.assertEqual(set(stats), {"lines", "malformed", "truncated"})
+            self.assertLessEqual(stats["malformed"], stats["lines"])
+            self.assertLessEqual(stats["lines"], p.MTREE_MAX_LINES)
+            self.assertFalse(stats["truncated"])
+            self.assertLessEqual(len(entries), stats["lines"])
+            for path, attrs in entries.items():
+                self.assertTrue(path.startswith("/"), path)
+                self.assertTrue(set(attrs) <= p.MTREE_KEYS, attrs)
+                if "type" in attrs:
+                    self.assertIn(attrs["type"], p.MTREE_TYPES)
+                if "mode" in attrs:
+                    self.assertTrue(0 <= attrs["mode"] <= 0o7777)
 
-    @given(st.lists(path_part, min_size=1, max_size=4), st.integers(0, 0o7777), st.integers(0, 65535), st.integers(0, 65535))
-    def test_mtree_set_defaults_are_inherited_then_overridden(self, parts, mode, uid, gid):
-        path = "/" + "/".join(parts)
-        raw = f"/set type=file uid={uid} gid={gid} mode={mode:o}\n.{path} size=7\n./over mode=600\n".encode()
-        entries, stats = p.parse_pacman_mtree(raw)
-        self.assertEqual(stats["malformed"], 0)
-        self.assertEqual(entries[path], {"type": "file", "uid": uid, "gid": gid, "mode": mode, "size": 7})
-        self.assertEqual(entries["/over"]["mode"], 0o600)
+        @given(st.lists(path_part, min_size=1, max_size=4), st.integers(0, 0o7777), st.integers(0, 65535), st.integers(0, 65535))
+        def test_mtree_set_defaults_are_inherited_then_overridden(self, parts, mode, uid, gid):
+            path = "/" + "/".join(parts)
+            raw = f"/set type=file uid={uid} gid={gid} mode={mode:o}\n.{path} size=7\n./over mode=600\n".encode()
+            entries, stats = p.parse_pacman_mtree(raw)
+            self.assertEqual(stats["malformed"], 0)
+            self.assertEqual(entries[path], {"type": "file", "uid": uid, "gid": gid, "mode": mode, "size": 7})
+            self.assertEqual(entries["/over"]["mode"], 0o600)
 
-    @given(any_bytes)
-    def test_apk_total_and_keys_closed(self, raw):
-        db, stats = p.parse_apk_installed(raw)
-        self.assertEqual(set(db), {"packages", "files"})
-        self.assertEqual(set(stats), {"lines", "malformed", "truncated"})
-        self.assertLessEqual(stats["malformed"], stats["lines"] + 1)
-        names = {pkg["name"] for pkg in db["packages"]}
-        for path, info in db["files"].items():
-            self.assertTrue(path.startswith("/") and "//" not in path, path)
-            self.assertTrue(set(info) <= p.APK_FILE_KEYS, info)
-            self.assertIn(info["package"], names)
-        self.assertEqual(sum(pkg["files"] for pkg in db["packages"]) >= len(db["files"]), True)
+        @given(any_bytes)
+        def test_apk_total_and_keys_closed(self, raw):
+            db, stats = p.parse_apk_installed(raw)
+            self.assertEqual(set(db), {"packages", "files"})
+            self.assertEqual(set(stats), {"lines", "malformed", "truncated"})
+            self.assertLessEqual(stats["malformed"], stats["lines"] + 1)
+            names = {pkg["name"] for pkg in db["packages"]}
+            for path, info in db["files"].items():
+                self.assertTrue(path.startswith("/") and "//" not in path, path)
+                self.assertTrue(set(info) <= p.APK_FILE_KEYS, info)
+                self.assertIn(info["package"], names)
+            self.assertEqual(sum(pkg["files"] for pkg in db["packages"]) >= len(db["files"]), True)
 
-    @given(any_text)
-    def test_rpm_counts_every_nonblank_line_exactly_once(self, text):
-        review = p.rpm_verify_review(text)
-        nonblank = sum(1 for line in text.splitlines() if line.split())
-        self.assertEqual(sum(review[k] for k in p.RPM_REVIEW_COUNTERS), nonblank)
-        self.assertLessEqual(len(review["missing_by_prefix"]), 10)
-        self.assertLessEqual(sum(review["missing_by_prefix"].values()), review["missing_files"])
+        @given(any_text)
+        def test_rpm_counts_every_nonblank_line_exactly_once(self, text):
+            review = p.rpm_verify_review(text)
+            nonblank = sum(1 for line in text.splitlines() if line.split())
+            self.assertEqual(sum(review[k] for k in p.RPM_REVIEW_COUNTERS), nonblank)
+            self.assertLessEqual(len(review["missing_by_prefix"]), 10)
+            self.assertLessEqual(sum(review["missing_by_prefix"].values()), review["missing_files"])
 
-    @given(rpm_column, rpm_type, st.lists(path_part, min_size=1, max_size=4))
-    def test_rpm_attribute_line_classification_is_exhaustive(self, column, marker, parts):
-        line = f"{column}  {marker or ' '} /{'/'.join(parts)}"
-        review = p.rpm_verify_review(line)
-        if column[2] == "5":
-            key = "content_changed_conffiles" if marker == "c" else "content_changed_other_files"
-        elif "?" in column:
-            key = "unverifiable"
-        elif column.strip("."):
-            key = "metadata_changed_only"
-        else:
-            key = "unparsed_lines"
-        self.assertEqual(review[key], 1, (line, review))
+        @given(rpm_column, rpm_type, st.lists(path_part, min_size=1, max_size=4))
+        def test_rpm_attribute_line_classification_is_exhaustive(self, column, marker, parts):
+            line = f"{column}  {marker or ' '} /{'/'.join(parts)}"
+            review = p.rpm_verify_review(line)
+            if column[2] == "5":
+                key = "content_changed_conffiles" if marker == "c" else "content_changed_other_files"
+            elif "?" in column:
+                key = "unverifiable"
+            elif column.strip("."):
+                key = "metadata_changed_only"
+            else:
+                key = "unparsed_lines"
+            self.assertEqual(review[key], 1, (line, review))
 
-    @given(manager, any_text)
-    def test_repo_settings_sorted_closed_subset(self, name, text):
-        codes = p.detect_insecure_repo_settings(name, text)
-        self.assertEqual(codes, sorted(set(codes)))
-        self.assertTrue(set(codes) <= p.REPO_SETTING_CODES, codes)
-        if name not in ("apt", "dnf", "pacman", "apk"):
-            self.assertEqual(codes, [])
+        @given(manager, any_text)
+        def test_repo_settings_sorted_closed_subset(self, name, text):
+            codes = p.detect_insecure_repo_settings(name, text)
+            self.assertEqual(codes, sorted(set(codes)))
+            self.assertTrue(set(codes) <= p.REPO_SETTING_CODES, codes)
+            if name not in ("apt", "dnf", "pacman", "apk"):
+                self.assertEqual(codes, [])
 
-    @given(manager, st.lists(st.text(ONE_LINE, max_size=80), max_size=20))
-    def test_fully_commented_input_yields_nothing(self, name, lines):
-        hashed = "\n".join("#" + line for line in lines)
-        self.assertEqual(p.detect_insecure_repo_settings(name, hashed), [])
-        if name == "dnf":
-            self.assertEqual(p.detect_insecure_repo_settings(name, "\n".join(";" + line for line in lines)), [])
+        @given(manager, st.lists(st.text(ONE_LINE, max_size=80), max_size=20))
+        def test_fully_commented_input_yields_nothing(self, name, lines):
+            hashed = "\n".join("#" + line for line in lines)
+            self.assertEqual(p.detect_insecure_repo_settings(name, hashed), [])
+            if name == "dnf":
+                self.assertEqual(p.detect_insecure_repo_settings(name, "\n".join(";" + line for line in lines)), [])
 
-    @given(st.lists(st.text(ONE_LINE, max_size=80), max_size=20))
-    def test_apt_conf_comment_forms_are_inert(self, lines):
-        slashed = "\n".join("// " + line for line in lines)
-        self.assertEqual(p.detect_insecure_repo_settings("apt", slashed), [])
-        blocked = "/*\n" + "\n".join(line.replace("*/", "") for line in lines) + "\n*/\n"
-        self.assertEqual(p.detect_insecure_repo_settings("apt", blocked), [])
+        @given(st.lists(st.text(ONE_LINE, max_size=80), max_size=20))
+        def test_apt_conf_comment_forms_are_inert(self, lines):
+            slashed = "\n".join("// " + line for line in lines)
+            self.assertEqual(p.detect_insecure_repo_settings("apt", slashed), [])
+            blocked = "/*\n" + "\n".join(line.replace("*/", "") for line in lines) + "\n*/\n"
+            self.assertEqual(p.detect_insecure_repo_settings("apt", blocked), [])
 
-    @given(any_text)
-    def test_detect_managers_total_on_arbitrary_relative_root(self, name):
-        with tempfile.TemporaryDirectory() as tmp:
-            result = p.detect_managers(Path(tmp) / name.replace("\x00", "").replace("/", "_"))
-            self.assertEqual(result, [])
+        @given(any_text)
+        def test_detect_managers_total_on_arbitrary_relative_root(self, name):
+            with tempfile.TemporaryDirectory() as tmp:
+                result = p.detect_managers(Path(tmp) / name.replace("\x00", "").replace("/", "_"))
+                self.assertEqual(result, [])
+
 
 
 if __name__ == "__main__":  # pragma: no cover

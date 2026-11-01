@@ -103,251 +103,255 @@ class HypothesisAvailability(unittest.TestCase):
         self.assertTrue(HAVE_HYPOTHESIS, "FALSICORE_REQUIRE_HYPOTHESIS=1 but hypothesis is not importable")
 
 
-@unittest.skipUnless(HAVE_HYPOTHESIS, "hypothesis not installed")
-class ShellAnalysisProperties(unittest.TestCase):
-    """Claim C5: the shell analyser never guesses and never crashes."""
+if HAVE_HYPOTHESIS:
+    # Strategy names exist only when Hypothesis imported; the classes live inside the guard
+    # so the module (and the packaged self-test) imports cleanly without it.
+    @unittest.skipUnless(HAVE_HYPOTHESIS, "hypothesis not installed")
+    class ShellAnalysisProperties(unittest.TestCase):
+        """Claim C5: the shell analyser never guesses and never crashes."""
 
-    @given(shell_text)
-    def test_total_deterministic_and_closed_vocabulary(self, text):
-        first = shell_syntax.analyze(text)
-        second = shell_syntax.analyze(text)
-        self.assertEqual(first, second)
-        self.assertTrue(set(first["patterns"]) <= shell_syntax.PATTERN_CODES, first["patterns"])
-        self.assertTrue(set(first["limitations"]) <= shell_syntax.LIMITATION_CODES, first["limitations"])
-        self.assertEqual(first["patterns"], sorted(set(first["patterns"])))
-        self.assertEqual(first["limitations"], sorted(set(first["limitations"])))
-        lines = [m["line"] for m in first["matches"]]
-        self.assertEqual(lines, sorted(lines))
-        self.assertTrue(all(isinstance(n, int) and n >= 1 for n in lines))
-        self.assertTrue(all(isinstance(s, str) for s in first["sourced"]))
+        @given(shell_text)
+        def test_total_deterministic_and_closed_vocabulary(self, text):
+            first = shell_syntax.analyze(text)
+            second = shell_syntax.analyze(text)
+            self.assertEqual(first, second)
+            self.assertTrue(set(first["patterns"]) <= shell_syntax.PATTERN_CODES, first["patterns"])
+            self.assertTrue(set(first["limitations"]) <= shell_syntax.LIMITATION_CODES, first["limitations"])
+            self.assertEqual(first["patterns"], sorted(set(first["patterns"])))
+            self.assertEqual(first["limitations"], sorted(set(first["limitations"])))
+            lines = [m["line"] for m in first["matches"]]
+            self.assertEqual(lines, sorted(lines))
+            self.assertTrue(all(isinstance(n, int) and n >= 1 for n in lines))
+            self.assertTrue(all(isinstance(s, str) for s in first["sourced"]))
 
-    @given(st.text(NO_NUL_NO_NL, max_size=200))
-    def test_comment_line_is_inert(self, body):
-        result = shell_syntax.analyze("# " + body)
-        self.assertEqual(result["patterns"], [])
-        self.assertEqual(result["limitations"], [])
-        self.assertEqual(result["sourced"], [])
+        @given(st.text(NO_NUL_NO_NL, max_size=200))
+        def test_comment_line_is_inert(self, body):
+            result = shell_syntax.analyze("# " + body)
+            self.assertEqual(result["patterns"], [])
+            self.assertEqual(result["limitations"], [])
+            self.assertEqual(result["sourced"], [])
 
-    @given(st.text(st.characters(blacklist_categories=("Cs",), blacklist_characters="'\x00"), max_size=200))
-    def test_single_quoted_data_is_inert(self, body):
-        result = shell_syntax.analyze(f"echo '{body}'")
-        self.assertEqual(result["patterns"], [])
-        self.assertEqual(result["limitations"], [])
+        @given(st.text(st.characters(blacklist_categories=("Cs",), blacklist_characters="'\x00"), max_size=200))
+        def test_single_quoted_data_is_inert(self, body):
+            result = shell_syntax.analyze(f"echo '{body}'")
+            self.assertEqual(result["patterns"], [])
+            self.assertEqual(result["limitations"], [])
 
-    @given(wrapper_chain, temp_prefix, identifier)
-    def test_volatile_executable_is_seen_through_transparent_wrappers(self, chain, prefix, name):
-        text = f"{chain} {prefix}{name} --arg".strip()
-        self.assertIn("TEMP_PATH_IN_EXECUTION", shell_syntax.analyze(text)["patterns"], text)
+        @given(wrapper_chain, temp_prefix, identifier)
+        def test_volatile_executable_is_seen_through_transparent_wrappers(self, chain, prefix, name):
+            text = f"{chain} {prefix}{name} --arg".strip()
+            self.assertIn("TEMP_PATH_IN_EXECUTION", shell_syntax.analyze(text)["patterns"], text)
 
-    @given(fetcher, url, code_sink)
-    def test_download_piped_into_interpreter_is_seen(self, fetch, address, sink):
-        text = f"{fetch} {address} | {sink}"
-        self.assertIn("REMOTE_SCRIPT_PIPELINE", shell_syntax.analyze(text)["patterns"], text)
+        @given(fetcher, url, code_sink)
+        def test_download_piped_into_interpreter_is_seen(self, fetch, address, sink):
+            text = f"{fetch} {address} | {sink}"
+            self.assertIn("REMOTE_SCRIPT_PIPELINE", shell_syntax.analyze(text)["patterns"], text)
 
-    @given(base64_blob, code_sink)
-    def test_decoded_data_piped_into_interpreter_is_seen(self, blob, sink):
-        text = f"echo {blob} | base64 -d | {sink}"
-        self.assertIn("BASE64_DECODE_EXECUTION_CONTEXT", shell_syntax.analyze(text)["patterns"], text)
+        @given(base64_blob, code_sink)
+        def test_decoded_data_piped_into_interpreter_is_seen(self, blob, sink):
+            text = f"echo {blob} | base64 -d | {sink}"
+            self.assertIn("BASE64_DECODE_EXECUTION_CONTEXT", shell_syntax.analyze(text)["patterns"], text)
 
-    @given(identifier, st.text(NO_NUL_NO_NL, max_size=30))
-    def test_expanded_command_head_is_a_limitation_not_a_verdict(self, name, rest):
-        result = shell_syntax.analyze(f"${name} {rest}")
-        self.assertIn("EXPANSION_NOT_RESOLVED", result["limitations"])
+        @given(identifier, st.text(NO_NUL_NO_NL, max_size=30))
+        def test_expanded_command_head_is_a_limitation_not_a_verdict(self, name, rest):
+            result = shell_syntax.analyze(f"${name} {rest}")
+            self.assertIn("EXPANSION_NOT_RESOLVED", result["limitations"])
 
-    @given(shell_text)
-    def test_nul_bytes_cannot_forge_markers(self, text):
-        with_nul = text + "\x00PROCSUB9\x00 \x00VAR:HOME\x00"
-        result = shell_syntax.analyze(with_nul)
-        self.assertIn("NUL_IN_INPUT", result["limitations"])
-        stripped = shell_syntax.analyze(with_nul.replace("\x00", ""))
-        self.assertEqual(result["patterns"], stripped["patterns"])
-
-
-@unittest.skipUnless(HAVE_HYPOTHESIS, "hypothesis not installed")
-class DetectorTotality(unittest.TestCase):
-    """Pure detectors are total functions over untrusted text with closed outputs."""
-
-    ENDPOINT_CLASSES = {"wildcard", "loopback", "link_local", "private", "public", "other", "unknown"}
-    JOURNAL_RULES = {"SSH_ACCEPTED", "SSH_FAILED", "SUDO_SESSION", "SEGFAULT", "APPARMOR_DENIED",
-                     "NEW_USER", "CRON_EVENT", "OOM_EVENT"}
-
-    @given(any_text)
-    def test_endpoint_class_closed(self, text):
-        self.assertIn(detectors.endpoint_class(text), self.ENDPOINT_CLASSES)
-
-    @given(any_text)
-    def test_parse_ss_total(self, text):
-        rows = detectors.parse_ss(text)
-        for row in rows:
-            self.assertEqual(set(row), {"proto", "state", "local_class", "local_port", "remote_class",
-                                        "remote_id", "has_process_info", "pids"})
-            self.assertEqual(row["pids"], sorted(row["pids"]))
-            self.assertIn(row["proto"], ("tcp", "udp", "tcp6", "udp6"))
-
-    @given(any_text)
-    def test_dpkg_review_counts_every_nonblank_line_exactly_once(self, text):
-        review = detectors.dpkg_verify_review(text)
-        nonblank = sum(1 for line in text.splitlines() if line.split())
-        counted = sum(review[k] for k in ("content_changed_conffiles", "content_changed_other_files",
-                                          "missing_files", "unverifiable", "unparsed_lines"))
-        self.assertEqual(counted, nonblank)
-        self.assertLessEqual(len(review["missing_by_prefix"]), 10)
-        self.assertLessEqual(sum(review["missing_by_prefix"].values()), review["missing_files"])
-
-    @given(any_text)
-    def test_journal_rules_closed(self, text):
-        self.assertTrue(set(detectors.detect_journal_message(text)) <= self.JOURNAL_RULES)
-
-    @given(any_text, st.integers(0, 70000), st.booleans())
-    def test_classify_executable_total(self, path, uid, deleted):
-        for rule, severity in detectors.classify_executable(path, uid, deleted):
-            self.assertIn(rule, {"EXECUTABLE_IN_VOLATILE_PATH", "DELETED_RUNNING_EXECUTABLE", "ROOT_RUNNING_USER_PATH"})
-            self.assertIn(severity, {"high", "medium"})
-
-    @given(st.dictionaries(st.text(max_size=12), json_values, max_size=8))
-    def test_extension_assessment_total(self, manifest):
-        result = detectors.extension_assessment(manifest)
-        self.assertIsInstance(result["risk_flag"], bool)
-        self.assertIsInstance(result["broad_host_access"], bool)
-        self.assertEqual(result["sensitive_permissions"], sorted(result["sensitive_permissions"]))
-
-    @given(any_text)
-    def test_host_pattern_check_total(self, pattern):
-        self.assertIsInstance(detectors.grants_host_access(pattern, ("instagram.com", "www.instagram.com", "i.instagram.com", "graph.instagram.com")), bool)
-
-    @given(st.binary(max_size=300), st.integers(0, 299))
-    def test_json_size_bound_is_enforced_before_parsing(self, raw, limit):
-        if len(raw) > limit:
-            with self.assertRaises(ValueError):
-                detectors.safe_json_parse(raw, limit)
-
-    @given(st.lists(st.text(max_size=20)))
-    def test_browser_flag_review_total(self, argv):
-        review = detectors.browser_flag_review(argv)
-        self.assertIn(review["debug_channel"], (None, "pipe", "port"))
-        self.assertEqual(review["flags"], sorted(set(review["flags"])))
+        @given(shell_text)
+        def test_nul_bytes_cannot_forge_markers(self, text):
+            with_nul = text + "\x00PROCSUB9\x00 \x00VAR:HOME\x00"
+            result = shell_syntax.analyze(with_nul)
+            self.assertIn("NUL_IN_INPUT", result["limitations"])
+            stripped = shell_syntax.analyze(with_nul.replace("\x00", ""))
+            self.assertEqual(result["patterns"], stripped["patterns"])
 
 
-@unittest.skipUnless(HAVE_HYPOTHESIS, "hypothesis not installed")
-class ReportIdentityProperties(unittest.TestCase):
-    """Claim C3: identity and digest depend on observations, not on enumeration order."""
+    @unittest.skipUnless(HAVE_HYPOTHESIS, "hypothesis not installed")
+    class DetectorTotality(unittest.TestCase):
+        """Pure detectors are total functions over untrusted text with closed outputs."""
 
-    @given(st.lists(finding, max_size=8), st.randoms(use_true_random=False))
-    def test_stable_findings_is_permutation_invariant(self, findings, rnd):
-        shuffled = list(findings)
-        rnd.shuffle(shuffled)
-        self.assertEqual(report.stable_findings(findings), report.stable_findings(shuffled))
+        ENDPOINT_CLASSES = {"wildcard", "loopback", "link_local", "private", "public", "other", "unknown"}
+        JOURNAL_RULES = {"SSH_ACCEPTED", "SSH_FAILED", "SUDO_SESSION", "SEGFAULT", "APPARMOR_DENIED",
+                         "NEW_USER", "CRON_EVENT", "OOM_EVENT"}
 
-    @given(st.lists(finding, max_size=8))
-    def test_stable_findings_is_idempotent(self, findings):
-        once = report.stable_findings(findings)
-        self.assertEqual(report.stable_findings(once), once)
+        @given(any_text)
+        def test_endpoint_class_closed(self, text):
+            self.assertIn(detectors.endpoint_class(text), self.ENDPOINT_CLASSES)
 
-    @given(st.lists(finding, max_size=8))
-    def test_ids_unique_and_observations_bounded(self, findings):
-        stable = report.stable_findings(findings)
-        ids = [f["id"] for f in stable]
-        self.assertEqual(len(ids), len(set(ids)))
-        total_in = sum(len(f["observations"]) for f in findings)
-        kept = sum(len(f["observations"]) for f in stable)
-        omitted = sum(f["observations_omitted"] for f in stable)
-        self.assertEqual(kept + omitted, total_in)
-        for f in stable:
-            self.assertLessEqual(len(f["observations"]), report.MAX_OBSERVATIONS_PER_FINDING)
+        @given(any_text)
+        def test_parse_ss_total(self, text):
+            rows = detectors.parse_ss(text)
+            for row in rows:
+                self.assertEqual(set(row), {"proto", "state", "local_class", "local_port", "remote_class",
+                                            "remote_id", "has_process_info", "pids"})
+                self.assertEqual(row["pids"], sorted(row["pids"]))
+                self.assertIn(row["proto"], ("tcp", "udp", "tcp6", "udp6"))
 
-    @given(st.lists(finding, max_size=6), st.lists(coverage_row, max_size=6), baseline,
-           st.randoms(use_true_random=False))
-    def test_analysis_digest_is_order_independent(self, findings, coverage, base, rnd):
-        digest = report._analysis_digest(findings, coverage, base)
-        f2, c2 = list(findings), list(coverage)
-        rnd.shuffle(f2)
-        rnd.shuffle(c2)
-        self.assertEqual(digest, report._analysis_digest(f2, c2, base))
-        self.assertEqual(len(digest), 64)
+        @given(any_text)
+        def test_dpkg_review_counts_every_nonblank_line_exactly_once(self, text):
+            review = detectors.dpkg_verify_review(text)
+            nonblank = sum(1 for line in text.splitlines() if line.split())
+            counted = sum(review[k] for k in ("content_changed_conffiles", "content_changed_other_files",
+                                              "missing_files", "unverifiable", "unparsed_lines"))
+            self.assertEqual(counted, nonblank)
+            self.assertLessEqual(len(review["missing_by_prefix"]), 10)
+            self.assertLessEqual(sum(review["missing_by_prefix"].values()), review["missing_files"])
 
-    @given(st.lists(finding, max_size=6), st.lists(coverage_row, max_size=6), baseline)
-    def test_pid_attribution_never_enters_the_digest(self, findings, coverage, base):
-        relabelled = [{**f, "observations": [{"pid": 1}], "id": "X"} for f in findings]
-        self.assertEqual(report._analysis_digest(findings, coverage, base),
-                         report._analysis_digest(relabelled, coverage, base))
+        @given(any_text)
+        def test_journal_rules_closed(self, text):
+            self.assertTrue(set(detectors.detect_journal_message(text)) <= self.JOURNAL_RULES)
 
-    @given(any_text)
-    def test_markdown_cells_cannot_break_tables_or_inject_html(self, text):
-        cell = report._safe_markdown(text)
-        for forbidden in ("|", "\n", "\r", "`", "<", ">"):
-            self.assertNotIn(forbidden, cell)
+        @given(any_text, st.integers(0, 70000), st.booleans())
+        def test_classify_executable_total(self, path, uid, deleted):
+            for rule, severity in detectors.classify_executable(path, uid, deleted):
+                self.assertIn(rule, {"EXECUTABLE_IN_VOLATILE_PATH", "DELETED_RUNNING_EXECUTABLE", "ROOT_RUNNING_USER_PATH"})
+                self.assertIn(severity, {"high", "medium"})
 
-    @given(any_text, st.integers(1, 400))
-    def test_terminal_safe_strips_controls_and_bounds_length(self, text, limit):
-        out = guide.terminal_safe(text, limit)
-        self.assertIsNone(guide._CONTROL.search(out))
-        self.assertLessEqual(len(out), 6 * limit)
+        @given(st.dictionaries(st.text(max_size=12), json_values, max_size=8))
+        def test_extension_assessment_total(self, manifest):
+            result = detectors.extension_assessment(manifest)
+            self.assertIsInstance(result["risk_flag"], bool)
+            self.assertIsInstance(result["broad_host_access"], bool)
+            self.assertEqual(result["sensitive_permissions"], sorted(result["sensitive_permissions"]))
 
-    @given(st.dictionaries(st.text(max_size=8), json_values, max_size=6))
-    def test_identity_line_total(self, finding_doc):
-        self.assertIsInstance(guide.identity_line(finding_doc), str)
+        @given(any_text)
+        def test_host_pattern_check_total(self, pattern):
+            self.assertIsInstance(detectors.grants_host_access(pattern, ("instagram.com", "www.instagram.com", "i.instagram.com", "graph.instagram.com")), bool)
 
-    @given(any_text)
-    def test_every_rule_name_has_a_complete_guide_entry(self, name):
-        entry = guide.rule(name)
-        self.assertEqual(set(entry), {"priority", "observed", "benign", "uncertainty", "action"})
+        @given(st.binary(max_size=300), st.integers(0, 299))
+        def test_json_size_bound_is_enforced_before_parsing(self, raw, limit):
+            if len(raw) > limit:
+                with self.assertRaises(ValueError):
+                    detectors.safe_json_parse(raw, limit)
 
-
-@unittest.skipUnless(HAVE_HYPOTHESIS, "hypothesis not installed")
-class CommandExtractionModel(unittest.TestCase):
-    """Cron and .desktop adapters return exactly the command text, nothing else."""
-
-    @given(cron_field, cron_field, cron_field, cron_mon, cron_dow, cron_command)
-    def test_user_crontab_schedule_is_stripped_exactly(self, m, h, dom, mon, dow, command):
-        line = f"{m} {h} {dom} {mon} {dow} {command}"
-        self.assertEqual(config_commands.cron_commands(line), command.strip())
-
-    @given(cron_field, cron_field, cron_field, cron_mon, cron_dow, identifier, cron_command)
-    def test_system_crontab_user_field_is_stripped_exactly(self, m, h, dom, mon, dow, user, command):
-        line = f"{m} {h} {dom} {mon} {dow} {user} {command}"
-        self.assertEqual(config_commands.cron_commands(line, system=True), command.strip())
-
-    @given(st.sampled_from(["@reboot", "@daily", "@hourly", "@weekly"]), cron_command)
-    def test_special_schedule_is_stripped_exactly(self, special, command):
-        self.assertEqual(config_commands.cron_commands(f"{special} {command}"), command.strip())
-
-    @given(st.sampled_from(["Exec", "TryExec"]), st.text(ONE_LINE, max_size=60))
-    def test_desktop_exec_value_is_returned_verbatim(self, key, value):
-        self.assertEqual(config_commands.desktop_commands(f"[Desktop Entry]\n{key}={value}\nName=x\n"), value.strip())
-
-    @given(st.text(ONE_LINE, max_size=60).filter(lambda s: s.strip() not in ("Exec", "TryExec")), st.text(ONE_LINE, max_size=60))
-    def test_other_desktop_keys_are_data(self, key, value):
-        self.assertEqual(config_commands.desktop_commands(f"{key}={value}\n"), "")
+        @given(st.lists(st.text(max_size=20)))
+        def test_browser_flag_review_total(self, argv):
+            review = detectors.browser_flag_review(argv)
+            self.assertIn(review["debug_channel"], (None, "pipe", "port"))
+            self.assertEqual(review["flags"], sorted(set(review["flags"])))
 
 
-@unittest.skipUnless(HAVE_HYPOTHESIS, "hypothesis not installed")
-class BoundedReadProperties(unittest.TestCase):
-    """safe_read returns exactly the bytes within its bound, or a reason, never a prefix."""
+    @unittest.skipUnless(HAVE_HYPOTHESIS, "hypothesis not installed")
+    class ReportIdentityProperties(unittest.TestCase):
+        """Claim C3: identity and digest depend on observations, not on enumeration order."""
 
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.counter = 0
+        @given(st.lists(finding, max_size=8), st.randoms(use_true_random=False))
+        def test_stable_findings_is_permutation_invariant(self, findings, rnd):
+            shuffled = list(findings)
+            rnd.shuffle(shuffled)
+            self.assertEqual(report.stable_findings(findings), report.stable_findings(shuffled))
 
-    @given(st.binary(max_size=5000), st.integers(0, 10000))
-    def test_safe_read_is_exact_or_refuses(self, data, limit):
-        self.counter += 1
-        path = Path(self.tmp.name) / f"f{self.counter}"
-        path.write_bytes(data)
-        result = safety.safe_read(path, limit)
-        if len(data) <= limit:
-            self.assertEqual(result, (data, "COMPLETED"))
-        else:
-            self.assertEqual(result, (None, "TOO_LARGE"))
+        @given(st.lists(finding, max_size=8))
+        def test_stable_findings_is_idempotent(self, findings):
+            once = report.stable_findings(findings)
+            self.assertEqual(report.stable_findings(once), once)
 
-    @given(st.text(max_size=300))
-    def test_exclusive_write_roundtrip_and_no_overwrite(self, content):
-        self.counter += 1
-        path = Path(self.tmp.name) / f"w{self.counter}"
-        safety.exclusive_write(path, content)
-        self.assertEqual(path.read_bytes(), content.encode("utf-8"))
-        with self.assertRaises(FileExistsError):
-            safety.exclusive_write(path, "again")
+        @given(st.lists(finding, max_size=8))
+        def test_ids_unique_and_observations_bounded(self, findings):
+            stable = report.stable_findings(findings)
+            ids = [f["id"] for f in stable]
+            self.assertEqual(len(ids), len(set(ids)))
+            total_in = sum(len(f["observations"]) for f in findings)
+            kept = sum(len(f["observations"]) for f in stable)
+            omitted = sum(f["observations_omitted"] for f in stable)
+            self.assertEqual(kept + omitted, total_in)
+            for f in stable:
+                self.assertLessEqual(len(f["observations"]), report.MAX_OBSERVATIONS_PER_FINDING)
+
+        @given(st.lists(finding, max_size=6), st.lists(coverage_row, max_size=6), baseline,
+               st.randoms(use_true_random=False))
+        def test_analysis_digest_is_order_independent(self, findings, coverage, base, rnd):
+            digest = report._analysis_digest(findings, coverage, base)
+            f2, c2 = list(findings), list(coverage)
+            rnd.shuffle(f2)
+            rnd.shuffle(c2)
+            self.assertEqual(digest, report._analysis_digest(f2, c2, base))
+            self.assertEqual(len(digest), 64)
+
+        @given(st.lists(finding, max_size=6), st.lists(coverage_row, max_size=6), baseline)
+        def test_pid_attribution_never_enters_the_digest(self, findings, coverage, base):
+            relabelled = [{**f, "observations": [{"pid": 1}], "id": "X"} for f in findings]
+            self.assertEqual(report._analysis_digest(findings, coverage, base),
+                             report._analysis_digest(relabelled, coverage, base))
+
+        @given(any_text)
+        def test_markdown_cells_cannot_break_tables_or_inject_html(self, text):
+            cell = report._safe_markdown(text)
+            for forbidden in ("|", "\n", "\r", "`", "<", ">"):
+                self.assertNotIn(forbidden, cell)
+
+        @given(any_text, st.integers(1, 400))
+        def test_terminal_safe_strips_controls_and_bounds_length(self, text, limit):
+            out = guide.terminal_safe(text, limit)
+            self.assertIsNone(guide._CONTROL.search(out))
+            self.assertLessEqual(len(out), 6 * limit)
+
+        @given(st.dictionaries(st.text(max_size=8), json_values, max_size=6))
+        def test_identity_line_total(self, finding_doc):
+            self.assertIsInstance(guide.identity_line(finding_doc), str)
+
+        @given(any_text)
+        def test_every_rule_name_has_a_complete_guide_entry(self, name):
+            entry = guide.rule(name)
+            self.assertEqual(set(entry), {"priority", "observed", "benign", "uncertainty", "action"})
+
+
+    @unittest.skipUnless(HAVE_HYPOTHESIS, "hypothesis not installed")
+    class CommandExtractionModel(unittest.TestCase):
+        """Cron and .desktop adapters return exactly the command text, nothing else."""
+
+        @given(cron_field, cron_field, cron_field, cron_mon, cron_dow, cron_command)
+        def test_user_crontab_schedule_is_stripped_exactly(self, m, h, dom, mon, dow, command):
+            line = f"{m} {h} {dom} {mon} {dow} {command}"
+            self.assertEqual(config_commands.cron_commands(line), command.strip())
+
+        @given(cron_field, cron_field, cron_field, cron_mon, cron_dow, identifier, cron_command)
+        def test_system_crontab_user_field_is_stripped_exactly(self, m, h, dom, mon, dow, user, command):
+            line = f"{m} {h} {dom} {mon} {dow} {user} {command}"
+            self.assertEqual(config_commands.cron_commands(line, system=True), command.strip())
+
+        @given(st.sampled_from(["@reboot", "@daily", "@hourly", "@weekly"]), cron_command)
+        def test_special_schedule_is_stripped_exactly(self, special, command):
+            self.assertEqual(config_commands.cron_commands(f"{special} {command}"), command.strip())
+
+        @given(st.sampled_from(["Exec", "TryExec"]), st.text(ONE_LINE, max_size=60))
+        def test_desktop_exec_value_is_returned_verbatim(self, key, value):
+            self.assertEqual(config_commands.desktop_commands(f"[Desktop Entry]\n{key}={value}\nName=x\n"), value.strip())
+
+        @given(st.text(ONE_LINE, max_size=60).filter(lambda s: s.strip() not in ("Exec", "TryExec")), st.text(ONE_LINE, max_size=60))
+        def test_other_desktop_keys_are_data(self, key, value):
+            self.assertEqual(config_commands.desktop_commands(f"{key}={value}\n"), "")
+
+
+    @unittest.skipUnless(HAVE_HYPOTHESIS, "hypothesis not installed")
+    class BoundedReadProperties(unittest.TestCase):
+        """safe_read returns exactly the bytes within its bound, or a reason, never a prefix."""
+
+        def setUp(self):
+            self.tmp = tempfile.TemporaryDirectory()
+            self.addCleanup(self.tmp.cleanup)
+            self.counter = 0
+
+        @given(st.binary(max_size=5000), st.integers(0, 10000))
+        def test_safe_read_is_exact_or_refuses(self, data, limit):
+            self.counter += 1
+            path = Path(self.tmp.name) / f"f{self.counter}"
+            path.write_bytes(data)
+            result = safety.safe_read(path, limit)
+            if len(data) <= limit:
+                self.assertEqual(result, (data, "COMPLETED"))
+            else:
+                self.assertEqual(result, (None, "TOO_LARGE"))
+
+        @given(st.text(max_size=300))
+        def test_exclusive_write_roundtrip_and_no_overwrite(self, content):
+            self.counter += 1
+            path = Path(self.tmp.name) / f"w{self.counter}"
+            safety.exclusive_write(path, content)
+            self.assertEqual(path.read_bytes(), content.encode("utf-8"))
+            with self.assertRaises(FileExistsError):
+                safety.exclusive_write(path, "again")
+
 
 
 if __name__ == "__main__":  # pragma: no cover

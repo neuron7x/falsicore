@@ -1,0 +1,31 @@
+name: mutation
+on:
+  schedule:
+    - cron: '41 3 * * 2'   # weekly whole-package mutation run on main
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  whole-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Install coverage and Hypothesis (CI only)
+        run: python -m pip install --disable-pip-version-check coverage==7.13.3 hypothesis==6.135.26
+      - name: Record per-test coverage contexts
+        run: python tools/mutate.py --coverage
+      - name: Mutate every runtime module (survivors are the work list, not a failure of this job)
+        run: python tools/mutate.py --all --workers 4 --timeout 120 --budget 15000 --allow-survivors --json mutation.json --markdown mutation.md
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-${{ github.sha }}
+          path: |
+            mutation.json
+            mutation.md
+          if-no-files-found: error

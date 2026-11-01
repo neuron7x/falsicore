@@ -46,6 +46,10 @@ jobs:
           python -m ruff check --select F,E9,B,PLE falsicore tools falsicore.py
           python -m bandit -q -r falsicore tools falsicore.py -c pyproject.toml
           python -m mypy
+      - name: Verify fresh source-bound release receipt
+        run: |
+          python tools/release_receipt.py --output "$RUNNER_TEMP/RELEASE_RECEIPT.json"
+          python tools/release_receipt.py --check --output "$RUNNER_TEMP/RELEASE_RECEIPT.json"
       - name: Deterministic builds (twice) with external checksums
         shell: bash
         run: |
@@ -58,6 +62,7 @@ jobs:
           python tools/build_full.py "$RUNNER_TEMP/again"
           cmp "$out"/*.zip "$RUNNER_TEMP"/again/*.zip
           cp "$RUNNER_TEMP/a.pyz" "$out/falsicore.pyz"
+          cp "$RUNNER_TEMP/RELEASE_RECEIPT.json" "$out/RELEASE_RECEIPT.json"
           ( cd "$out" && sha256sum falsicore.pyz > falsicore.pyz.sha256 )
           python -I "$out/falsicore.pyz" verify-app
           python -I "$out/falsicore.pyz" self-test

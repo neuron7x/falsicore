@@ -1,0 +1,68 @@
+"""Negative controls for the independent FALSICORE evidence receipt gate."""
+from __future__ import annotations
+
+import copy
+import unittest
+from unittest.mock import patch
+from tools import release_receipt as g
+
+
+class Gate(unittest.TestCase):
+    def make(self):
+        c = g.ROOT / "tests"
+        return {
+            "schema": g.SCHEMA,
+            "runtime_version": g.__version__,
+            "input_sha256": "a" * 64,
+            "manifest_sha256": "b" * 64,
+            "sources_consistent": True,
+            "measurements": {
+                "suite": {"exit": 0, "ran": 900, "failed": 0, "errors": 0,
+                          "test_files": len(list(c.glob("test_*.py")))},
+                "coverage": {"num_statements": 100, "covered_lines": 92,
+                             "missing_lines": 8, "num_branches": 40,
+                             "covered_branches": 38, "missing_branches": 2},
+                "static_analysis": {k: {"exit": 0} for k in g.REQUIRED_STATIC},
+                "detection_validity": {"passes": True, "rules_without_positive_scenario": []},
+            },
+        }
+
+    def defects(self, data):
+        with patch.object(g, "input_fingerprint", return_value="a" * 64), \
+             patch.object(g, "manifest_fingerprint", return_value="b" * 64):
+            return g.defects(data)
+
+    def test_valid_shaped_receipt_is_accepted(self):
+        self.assertEqual(self.defects(self.make()), [])
+
+    def test_missing_or_wrong_source_attestation_is_rejected(self):
+        for key, value in (("input_sha256", "x"), ("manifest_sha256", "y"),
+                           ("sources_consistent", False), ("schema", "old")):
+            data = self.make()
+            data[key] = value
+            with self.subTest(key=key):
+                self.assertTrue(self.defects(data))
+
+    def test_stale_suite_coverage_and_ancillary_fails_closed(self):
+        for mode in ("tests", "coverage", "static", "validity"):
+            data = self.make()
+            if mode == "tests":
+                data["measurements"]["suite"]["ran"] = 0
+            if mode == "coverage":
+                data["measurements"]["coverage"]["covered_branches"] = 0
+            if mode == "static":
+                data["measurements"]["static_analysis"]["bandit"]["exit"] = 1
+            if mode == "validity":
+                data["measurements"]["detection_validity"]["passes"] = False
+            with self.subTest(mode=mode):
+                self.assertTrue(self.defects(data))
+
+    def test_malformed_coverage_is_not_a_measurement(self):
+        for bad in (None, {}, {"percent_display": "100"}):
+            data = self.make()
+            data["measurements"]["coverage"] = bad
+            self.assertTrue(self.defects(data))
+
+
+if __name__ == "__main__":
+    unittest.main()

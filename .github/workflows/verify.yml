@@ -44,8 +44,6 @@ jobs:
         run: python -m tools.evaluate_rules
       - name: Detection validity (planted artifacts vs benign twins; committed table current)
         run: python tools/validity.py --check
-      - name: Release evidence names this version and a green suite
-        run: python tools/release_evidence.py --check
       - name: Reproducible builds and packaged self-test
         if: matrix.python-version == '3.13'
         shell: bash
@@ -62,6 +60,28 @@ jobs:
           mkdir -m 700 "$RUNNER_TEMP/runs"
           python -I "$RUNNER_TEMP/a.pyz" scan --profile quick --output-base "$RUNNER_TEMP/runs"
           git diff --exit-code
+  evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Install required evidence measurement dependencies
+        run: python -m pip install --disable-pip-version-check hypothesis==6.135.26 coverage==7.13.3 ruff==0.15.22 bandit==1.8.6 mypy==1.18.2
+      - name: Measure a source-bound receipt
+        run: python tools/release_receipt.py --output "$RUNNER_TEMP/RELEASE_RECEIPT.json"
+      - name: Independently validate recorded measurements
+        run: python tools/release_receipt.py --check --output "$RUNNER_TEMP/RELEASE_RECEIPT.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: release-receipt-${{ github.sha }}
+          path: ${{ runner.temp }}/RELEASE_RECEIPT.json
+          if-no-files-found: error
   mutation-diff:
     # New or changed runtime lines must arrive with tests that notice when they are wrong.
     if: github.event_name == 'pull_request'

@@ -22,6 +22,18 @@ ROOT_ALLOW = {
 }
 SOURCE_DIRS = {"falsicore", "tests", "tools"}
 DOCS_DIR = "docs"
+# Verification program inputs are admitted by exact path only. Do not turn
+# these directories into a recursive allowlist: local evidence can be private.
+VERIFICATION_FILES = {
+    "assurance/check_registry.py",
+    "assurance/test_check_registry.py",
+    "docs/verification/README.md",
+    "docs/verification/tasks.json",
+    "docs/verification/source/README.txt",
+    "docs/verification/source/AUDIT_CHECKSUMS.txt",
+    "docs/verification/source/FINDINGS.json",
+    "docs/verification/source/FALSICORE_VERIFICATION_ACT.md",
+}
 WORKFLOW_FILES = {
     ".github/workflows/verify.yml",
     ".github/workflows/codeql.yml",
@@ -39,7 +51,7 @@ def allowed_release_path(relative: Path) -> bool:
         return relative.suffix == ".py"
     if len(parts) == 2 and parts[0] == DOCS_DIR:
         return relative.suffix in (".md", ".json")
-    return relative.as_posix() in WORKFLOW_FILES
+    return relative.as_posix() in WORKFLOW_FILES | VERIFICATION_FILES
 FIXED_TIME = (2026, 1, 1, 0, 0, 0)
 
 

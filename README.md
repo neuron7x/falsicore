@@ -53,8 +53,11 @@ Each claim below is enforced by code and covered by tests.
 
 ## Measured evidence (0.2.0)
 
-Numbers are produced by tools in this repository and bound to the commit that
-carries them; CI fails when a committed table is stale.
+These are historical tool-reported measurements, not proof for the current
+commit. The [verification program](docs/VERIFICATION_PROGRAM.md) records open
+questions about evidence freshness and source binding; its assurance gates have
+not run. The source audit and its 39-item task registry are preserved in
+[`docs/verification/`](docs/verification/README.md).
 
 | What | Value | Produced by | Where |
 |---|---|---|---|

@@ -42,7 +42,7 @@ class ApkReferenceCompleteness(unittest.TestCase):
         return row, self.audit.stats["package_integrity"]["apk"]
 
     def test_malformed_row_fails_closed_while_valid_reference_remains_checked(self):
-        self.index.write_bytes(self.record + b"not-an-apk-record\n")
+        self.index.write_bytes(self.record.replace(b"\n\n", b"\nnot-an-apk-record\n\n"))
         row, review = self.scan()
         self.assertEqual(row["status"], "PARTIAL")
         self.assertEqual(row["reason_codes"].get("MALFORMED_INPUT"), 1)

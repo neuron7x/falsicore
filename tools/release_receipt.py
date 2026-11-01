@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -49,6 +51,18 @@ def manifest_fingerprint() -> str:
     return hashlib.sha256((ROOT / "SOURCE_MANIFEST.sha256").read_bytes()).hexdigest()
 
 
+def repository_head() -> str | None:
+    """Return the actual checkout HEAD; an environment variable is not proof."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD"], cwd=ROOT,
+            check=True, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+    head = proc.stdout.strip()
+    return head if re.fullmatch(r"[0-9a-f]{40}", head) else None
+
+
 def defects(receipt: dict) -> list[str]:
     problems: list[str] = []
     if receipt.get("schema") != SCHEMA or receipt.get("runtime_version") != __version__:
@@ -57,6 +71,11 @@ def defects(receipt: dict) -> list[str]:
         problems.append("source-test-workflow-fingerprint")
     if receipt.get("manifest_sha256") != manifest_fingerprint():
         problems.append("source-manifest-fingerprint")
+    observed_head = repository_head()
+    if observed_head is None or receipt.get("git_head_sha") != observed_head:
+        problems.append("exact-git-head-not-verified")
+    if receipt.get("head_consistent") is not True:
+        problems.append("git-head-changed-during-measurement")
     if receipt.get("sources_consistent") is not True:
         problems.append("source-changed-during-measurement")
     evidence = receipt.get("measurements")
@@ -101,10 +120,13 @@ def defects(receipt: dict) -> list[str]:
 
 
 def capture() -> dict:
+    head = repository_head()
     first = input_fingerprint()
     manifest = manifest_fingerprint()
     measurements = release_evidence.measure()
     return {"schema": SCHEMA, "runtime_version": __version__,
+            "git_head_sha": head,
+            "head_consistent": head is not None and head == repository_head(),
             "input_sha256": first, "manifest_sha256": manifest,
             "sources_consistent": first == input_fingerprint() and
             manifest == manifest_fingerprint(),

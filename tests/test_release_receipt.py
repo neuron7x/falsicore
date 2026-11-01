@@ -16,6 +16,8 @@ class Gate(unittest.TestCase):
             "input_sha256": "a" * 64,
             "manifest_sha256": "b" * 64,
             "sources_consistent": True,
+            "git_head_sha": "c" * 40,
+            "head_consistent": True,
             "measurements": {
                 "suite": {"exit": 0, "ran": 900, "failed": 0, "errors": 0,
                           "test_files": len(list(c.glob("test_*.py")))},
@@ -30,7 +32,8 @@ class Gate(unittest.TestCase):
 
     def defects(self, data):
         with patch.object(g, "input_fingerprint", return_value="a" * 64), \
-             patch.object(g, "manifest_fingerprint", return_value="b" * 64):
+             patch.object(g, "manifest_fingerprint", return_value="b" * 64), \
+             patch.object(g, "repository_head", return_value="c" * 40):
             return g.defects(data)
 
     def test_valid_shaped_receipt_is_accepted(self):
@@ -43,6 +46,22 @@ class Gate(unittest.TestCase):
             data[key] = value
             with self.subTest(key=key):
                 self.assertTrue(self.defects(data))
+
+    def test_missing_or_mismatched_git_head_is_rejected(self):
+        for name, value in (("git_head_sha", "d" * 40),
+                            ("git_head_sha", None),
+                            ("head_consistent", False)):
+            document = self.make()
+            document[name] = value
+            with self.subTest(name=name, value=value):
+                self.assertIn("exact-git-head-not-verified" if
+                              name == "git_head_sha" else
+                              "git-head-changed-during-measurement",
+                              self.defects(document))
+        with patch.object(g, "input_fingerprint", return_value="a" * 64), \
+             patch.object(g, "manifest_fingerprint", return_value="b" * 64), \
+             patch.object(g, "repository_head", return_value=None):
+            self.assertIn("exact-git-head-not-verified", g.defects(self.make()))
 
     def test_stale_suite_coverage_and_ancillary_fails_closed(self):
         for mode in ("tests", "coverage", "static", "validity"):

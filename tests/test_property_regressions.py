@@ -113,6 +113,9 @@ class P5_KeywordNamedProgram(unittest.TestCase):
                      "nohup", "exec", "time", "command", "setsid", "builtin"):      # P-10: wrappers living in /tmp
             self.assertIn("TEMP_PATH_IN_EXECUTION", analyze(f"/tmp/{name} --arg")["patterns"], name)
         self.assertIn("TEMP_PATH_IN_EXECUTION", analyze("nohup /tmp/x")["patterns"])   # a bare wrapper is still transparent
+        self.assertIn("TEMP_PATH_IN_EXECUTION", analyze("'nohup' /tmp/x")["patterns"])  # quoting does not change which program runs
+        for name in ("if", "then", "do", "while", "!", "{"):
+            self.assertEqual(analyze(f"'{name}' /tmp/x")["patterns"], [], name)         # but a quoted reserved word is a program
         self.assertEqual(analyze("if true; then nohup true; fi")["patterns"], [])
 
     def test_bare_keywords_are_still_not_commands(self):

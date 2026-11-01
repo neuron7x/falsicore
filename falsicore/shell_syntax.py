@@ -28,7 +28,7 @@ KEYWORDS_DATA = {"case", "for", "select", "function", "in"}
 KEYWORDS_END = {"fi", "done", "esac", "}"}
 TRANSPARENT = {"then", "do", "else", "elif", "if", "while", "until", "!", "{", "command", "builtin",
                "nohup", "setsid", "exec", "time"}
-# Reserved words are transparent only as bare words: "/tmp/if" is a program called "if".
+# Reserved words are transparent only as bare, unquoted words: "/tmp/if" and 'if' are programs called "if".
 RESERVED_TRANSPARENT = {"then", "do", "else", "elif", "if", "while", "until", "!", "{"}
 ASSIGN_BUILTINS = {"export", "declare", "local", "readonly", "typeset"}
 REDIRECTS = {"<", ">", ">>", "<&", ">&", "<>", "&>", "&>>", ">|", "<<<"}
@@ -83,7 +83,7 @@ class Op:
     op: str
     line: int
     body: str | None = None        # process substitution or here-document body
-    quoted_delimiter: bool = False
+    quoted_delimiter: bool = False  # no mutate: read only on here-document operators, which always set it
 
 
 class _Unterminated(Exception):
@@ -100,7 +100,7 @@ def _balanced(text: str, i: int, opener: str = "(", closer: str = ")") -> int:
             continue
         if c == "'":
             j = text.find("'", i + 1)
-            if j < 0:
+            if j < 0:  # no mutate: find() from i + 1 >= 1 returns -1 or >= 1
                 raise _Unterminated
             i = j + 1
             continue
@@ -128,6 +128,10 @@ def _double_quote_end(text: str, i: int) -> int:
             return i + 1
         if c == "$" and text.startswith("$(", i):
             i = _balanced(text, i + 2)
+            continue
+        if c == "$" and text.startswith("${", i):
+            # Quotes nest inside a brace expansion: "${x#"y"}" is one word (P-11).
+            i = _balanced(text, i + 2, "{", "}")
             continue
         if c == "`":
             j = _backtick_end(text, i + 1)
@@ -230,8 +234,10 @@ def _lex(text: str, gaps: set[str]) -> list[Word | Op]:
                         gaps.add("UNTERMINATED_HEREDOC")
                         break
                     end = text.find("\n", i)
-                    raw = text[i:] if end < 0 else text[i:end]
-                    i = n if end < 0 else end + 1
+                    if end < 0:  # no mutate: find() from i >= 1 returns -1 or >= 1
+                        end = n
+                    raw = text[i:end]
+                    i = min(end + 1, n)
                     line += 1
                     check = raw.lstrip("\t") if doc.op == "<<-" else raw
                     if check == doc.body:
@@ -277,7 +283,9 @@ def _lex(text: str, gaps: set[str]) -> list[Word | Op]:
                 inner = text[i + 1:end - 1]
                 k = 0
                 while k < len(inner):
-                    if inner[k] == "\\" and k + 1 < len(inner) and inner[k + 1] in '$`"\\\n':
+                    # The quote scan paired every backslash with a successor, so the
+                    # slice is never empty here; a slice cannot raise where an index would.
+                    if inner[k] == "\\" and inner[k + 1:k + 2] in ("$", "`", '"', "\\", "\n"):
                         w.text += inner[k + 1]
                         k += 2
                     elif inner[k] == "$":
@@ -446,7 +454,7 @@ def _head(words: list[Word], analyse_value) -> list[Word]:
             continue
         if _temporary(first.text):
             break                      # a wrapper that itself lives in a volatile path is the program to report (P-10)
-        if name in TRANSPARENT and (first.text == name or name not in RESERVED_TRANSPARENT):
+        if name in TRANSPARENT and (name not in RESERVED_TRANSPARENT or (first.text == name and not first.quoted)):
             words = words[1:]
         elif name in ("sudo", "doas"):
             words = _strip_options(words[1:], {"-u", "-g", "-h", "-C", "-p", "-r", "-t", "--user", "--group"})
@@ -583,10 +591,8 @@ class _Analysis:
                     self._code_from(procsub_emits[index], line)
                 elif _temporary(target.text):
                     self.found({"TEMP_PATH_IN_EXECUTION"}, line)
-                elif target.expands:
-                    self.sourced.append(target.text)  # collector may resolve $HOME forms
                 else:
-                    self.sourced.append(target.text)
+                    self.sourced.append(target.text)  # literal, or a $HOME form the collector may resolve
             return "", False
         if name == "eval":
             if any(w.expands for w in args):

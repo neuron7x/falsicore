@@ -7,6 +7,8 @@ stop generating a class of mutants or start skipping annotated lines.
 from __future__ import annotations
 
 import ast
+import contextlib
+import io
 import json
 import tempfile
 import unittest
@@ -100,6 +102,32 @@ class Reporting(unittest.TestCase):
         self.assertIn("m:2:1:y", text)
         self.assertNotIn("m:1:1:x", text)
         self.assertIn("score 0.6667", text)
+
+
+class Retry(unittest.TestCase):
+    def test_open_signatures_and_retention_follow_text_not_lines(self):
+        result = {"mutants": [
+            {"module": "snippet", "operator": "compare:Lt->LtE", "original": "if v < 0:", "mutated": "v <= 0", "status": "SURVIVED"},
+            {"module": "snippet", "operator": "int:shift", "original": "LIMIT = 10", "mutated": "11", "status": "KILLED"},
+            {"module": "snippet", "operator": "call:delete", "original": "log(total)", "mutated": "pass", "status": "NO_TESTS"},
+            {"module": "other", "operator": "bool:flip", "original": "x = True", "mutated": "False", "status": "ERROR"}]}
+        signatures = mutate.open_signatures(result)
+        self.assertEqual(set(signatures), {"snippet", "other"})
+        self.assertEqual(len(signatures["snippet"]), 2)
+        moved = "\n\n\n" + SNIPPET            # an unrelated edit above: every line number shifts
+        retained = mutate.retain(mutate.generate("snippet", moved), signatures["snippet"])
+        self.assertEqual(sorted((m.operator, m.mutated) for m in retained),
+                         [("call:delete", "pass"), ("compare:Lt->LtE", "v <= 0")])
+        self.assertEqual(mutate.retain(mutate.generate("snippet", SNIPPET), set()), [])
+
+    def test_retry_with_nothing_open_runs_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            earlier = Path(tmp) / "run.json"
+            earlier.write_text(json.dumps({"mutants": [{"module": "m", "operator": "o", "original": "x",
+                                                        "mutated": "y", "status": "KILLED"}]}))
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(mutate.main(["--retry", str(earlier)]), 0)
+            self.assertIn("nothing to retry", out.getvalue())
 
 
 if __name__ == "__main__":

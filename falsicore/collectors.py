@@ -6,6 +6,8 @@ import copy
 import datetime as dt
 import gzip
 import hashlib
+import hmac
+import ipaddress
 import io
 import json
 import os
@@ -249,6 +251,68 @@ def _hex_endpoint_port(field: str) -> int | None:
         return int(port, 16)
     except ValueError:
         return None
+
+
+def _proc_listener_endpoint(table: str, field: str) -> tuple[str, str, int] | None:
+    """Decode Linux /proc/net local_address, including IPv6 32-bit LE words.
+
+    No raw local address is ever emitted into a persisted finding.
+    """
+    addr, sep, port = field.partition(":")
+    width = 32 if table.endswith("6") else 8
+    if not sep or len(addr) != width or not re.fullmatch(r"[0-9A-Fa-f]+", addr):
+        return None
+    if not re.fullmatch(r"[0-9A-Fa-f]{4}", port):
+        return None
+    try:
+        raw = bytes.fromhex(addr)
+        if table.endswith("6"):
+            # Linux prints each 32-bit IPv6 word in little-endian order.
+            ordered = b"".join(raw[i:i + 4][::-1] for i in range(0, 16, 4))
+            host = str(ipaddress.IPv6Address(ordered))
+            family = "6"
+        else:
+            host = str(ipaddress.IPv4Address(raw[::-1]))
+            family = "4"
+    except ValueError:
+        return None
+    return (table.rstrip("6") + family, host, int(port, 16))
+
+
+def _ss_listener_endpoints(output: str) -> set[tuple[str, str, int]] | None:
+    """Keep exact local address/family/port; reject an ambiguous ss table.
+
+    An asterisk hostname, scope-qualified IPv6 address or malformed address
+    cannot prove absence in the other view. Do not reduce it to (proto, port).
+    """
+    result: set[tuple[str, str, int]] = set()
+    for row in output.splitlines():
+        fields = row.split()
+        if len(fields) < 2 or fields[0] not in ("tcp", "udp", "tcp6", "udp6"):
+            continue
+        if fields[1] not in ("LISTEN", "UNCONN"):
+            continue
+        if len(fields) < 5:
+            return None
+        addr, sep, port_text = fields[4].rpartition(":")
+        if not sep or not re.fullmatch(r"[0-9]{1,5}", port_text):
+            return None
+        if addr.startswith("[") and addr.endswith("]"):
+            addr = addr[1:-1]
+        if not addr or "%" in addr:
+            return None
+        try:
+            host = ipaddress.ip_address(addr)
+        except ValueError:
+            return None
+        family = "6" if host.version == 6 else "4"
+        if fields[0].endswith("6") and family != "6":
+            return None
+        port = int(port_text)
+        if port > 65535:
+            return None
+        result.add((fields[0].rstrip("6") + family, str(host), port))
+    return result
 
 
 class Audit:
@@ -2148,25 +2212,39 @@ class Audit:
                          observed={"module_ref": self.source(name), "observed_utc": utc_now()})
         stats["modules"] = {"proc_modules": len(in_proc), "sysfs_live": len(loaded_in_sys), "hidden": len(hidden)}
 
-    def _procnet_listeners(self) -> set[tuple[str, int]] | None:
-        found: set[tuple[str, int]] = set()
-        any_read = False
+    def _procnet_listeners(self) -> set[tuple[str, str, int]] | None:
+        found: set[tuple[str, str, int]] = set()
         net = self._proc_self() / "net"
         if not net.is_dir():
             net = self.proc_root / "net"          # fixture without a per-process net directory
         for name, listen_state in (("tcp", "0A"), ("tcp6", "0A"), ("udp", "07"), ("udp6", "07")):
             raw, _ = safe_read(net / name, 8 * 1024 * 1024)
+            # Any missing family table invalidates a negative cross-view claim.
             if raw is None:
-                continue
-            any_read = True
+                return None
             for line in raw.decode("ascii", "replace").splitlines()[1:]:
                 fields = line.split()
-                if len(fields) < 4 or fields[3] != listen_state:
+                if len(fields) < 4:
+                    return None
+                if fields[3] != listen_state:
                     continue
-                port = _hex_endpoint_port(fields[1])
-                if port is not None:
-                    found.add((name.rstrip("6"), port))
-        return found if any_read else None
+                endpoint = _proc_listener_endpoint(name, fields[1])
+                if endpoint is None:
+                    return None
+                found.add(endpoint)
+        return found
+
+    def _listener_evidence(self, endpoint: tuple[str, str, int], view: str) -> dict:
+        """Emit per-scan keyed pseudonym, never plaintext socket bind addresses."""
+        secret = getattr(self, "_listener_hash_key", None)
+        if secret is None:
+            secret = os.urandom(32)
+            self._listener_hash_key = secret
+        proto_family, address, port = endpoint
+        identity = hmac.new(secret, "\0".join((proto_family, address, str(port))).encode("ascii"),
+                            hashlib.sha256).hexdigest()[:24]
+        return {"proto": proto_family[:-1], "family": "ipv6" if proto_family.endswith("6") else "ipv4",
+                "port": port, "local_endpoint_id": identity, "visible_in": view}
 
     def _hidden_listeners(self, gaps: Gaps, stats: dict[str, Any]) -> None:
         before = self._procnet_listeners()
@@ -2175,52 +2253,51 @@ class Audit:
             return
         r = self.command("ss", ["-H", "-tuna", "-p"], timeout=15)
         if r["status"] != "COMPLETED" or r.get("truncated"):
-            # Negative inference from a partial ss table fabricates hidden
-            # listeners. Only a complete command result can be compared.
+            # Negative inference needs a complete socket table.
             self.command_gap(r, gaps)
-            if r["status"] == "PARTIAL":
+            if r["status"] == "PARTIAL" or r.get("truncated"):
                 gaps.add("INPUT_TRUNCATED")
             return
-        netlink: set[tuple[str, int]] = set()
-        for sock in d.parse_ss(r["stdout"]):
-            if sock["state"] in ("LISTEN", "UNCONN") and sock["local_port"].isdigit():
-                netlink.add((sock["proto"].rstrip("6"), int(sock["local_port"])))
-        after = self._procnet_listeners() or set()
-        stable = before & after                      # present across the ss call: not a race
+        netlink = _ss_listener_endpoints(r["stdout"])
+        if netlink is None:
+            gaps.add("PARSE_UNSUPPORTED")
+            return
+        after = self._procnet_listeners()
+        if after is None:
+            gaps.add("READ_FAILED")
+            return
+        stable = before & after
         procfs_only = sorted(stable - netlink)
-        # Transient churn must not be promoted to a rootkit signal.
-        # Confirm a discrepancy with a second complete ss snapshot and a
-        # subsequent procfs read; otherwise retain only an unconfirmed count.
+        # A new ss-only endpoint must persist in a second complete observation.
         suspects = netlink - before - after
-        confirmed: set[tuple[str, int]] = set()
+        confirmed: set[tuple[str, str, int]] = set()
         if suspects:
             again = self.command("ss", ["-H", "-tuna", "-p"], timeout=15)
             if again["status"] == "COMPLETED" and not again.get("truncated"):
-                next_netlink = {
-                    (sock["proto"].rstrip("6"), int(sock["local_port"]))
-                    for sock in d.parse_ss(again["stdout"])
-                    if sock["state"] in ("LISTEN", "UNCONN") and sock["local_port"].isdigit()
-                }
-                after_again = self._procnet_listeners()
-                if after_again is None:
-                    gaps.add("READ_FAILED")
+                next_netlink = _ss_listener_endpoints(again["stdout"])
+                if next_netlink is None:
+                    gaps.add("PARSE_UNSUPPORTED")
                 else:
-                    confirmed = suspects & next_netlink - after_again
+                    after_again = self._procnet_listeners()
+                    if after_again is None:
+                        gaps.add("READ_FAILED")
+                    else:
+                        confirmed = (suspects & next_netlink) - after_again
             else:
                 self.command_gap(again, gaps)
-                if again["status"] == "PARTIAL":
+                if again["status"] == "PARTIAL" or again.get("truncated"):
                     gaps.add("INPUT_TRUNCATED")
         netlink_only = sorted(confirmed)
-        for proto, port in procfs_only[:50]:
+        for endpoint in procfs_only[:50]:
             self.finding("HIDDEN_LISTENER", "high",
                          "A listening socket appears in /proc/net but not in the netlink socket table (ss); "
                          "one of the two views is being filtered", "crossview://listeners",
-                         {"proto": proto, "port": port, "visible_in": "PROCFS_ONLY"}, attack="T1014")
-        for proto, port in netlink_only[:50]:
+                         self._listener_evidence(endpoint, "PROCFS_ONLY"), attack="T1014")
+        for endpoint in netlink_only[:50]:
             self.finding("HIDDEN_LISTENER", "high",
                          "A listening socket is repeatedly present in ss but absent from /proc/net; "
                          "one kernel view may be filtered", "crossview://listeners",
-                         {"proto": proto, "port": port, "visible_in": "NETLINK_ONLY"}, attack="T1014")
+                         self._listener_evidence(endpoint, "NETLINK_ONLY"), attack="T1014")
         stats["listeners"] = {"procfs": len(stable), "netlink": len(netlink),
                               "procfs_only": len(procfs_only), "netlink_only": len(netlink_only)}
         if suspects - confirmed:

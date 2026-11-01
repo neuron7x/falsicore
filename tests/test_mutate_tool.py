@@ -10,6 +10,7 @@ import ast
 import contextlib
 import io
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -58,6 +59,26 @@ class Generation(unittest.TestCase):
         self.assertEqual(mutants[0].detail, "documentation example")
         bare = mutate.generate("s", "x = 1  # no mutate:\n")
         self.assertTrue(all(m.status != "ANNOTATED" for m in bare))
+
+    def test_child_stdout_zero_read_mutant_is_executed_and_killed(self):
+        """FC-23: 65536 -> 0 is observable, never eligible for a blanket waiver."""
+        source = (mutate.PACKAGE / "safety.py").read_text()
+        zeros = [
+            m for m in mutate.generate("safety", source)
+            if m.operator == "int:shift" and m.mutated == "0"
+            and "os.read(key.fd, min(0," in m.detail
+        ]
+        self.assertEqual(len(zeros), 1, "expected exactly one child-pipe read bound")
+        mutant = zeros[0]
+        self.assertNotEqual(mutant.status, "ANNOTATED")
+        with tempfile.TemporaryDirectory(prefix="fc23-child-stdout-") as td:
+            checkout = Path(td) / "checkout"
+            mutate._fresh_tree(checkout)
+            result = mutate.run_mutant(
+                mutant, {"test_executor_lifecycle.ExecutorLifecycleTests.test_stderr_is_separate_from_parsed_stdout"},
+                checkout, sys.executable, timeout=30
+            )
+        self.assertEqual(result.status, "KILLED", result.detail)
 
     def test_strings_are_never_mutated(self):
         mutants = mutate.generate("s", 'MESSAGE = "do not touch"\n')

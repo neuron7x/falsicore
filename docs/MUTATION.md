@@ -88,7 +88,26 @@ stdin-code paths; those of `report` in manifest-line validation, the
 semantic consistency branches and baseline selection; those of `safety` in
 the executor's bounds, exit-code and environment handling and the private
 run directory. `tests/test_{shell,report,safety}_mutation_killers.py` target
-them; the re-measurement is appended here when it has run.
+them; the re-measurement is appended below.
+
+## Re-measurement (01.11, `shell_syntax.py` at `eb2ebf9`)
+
+After the lexer killers (`test_shell_lexer_killers.py`, PR #16) and the
+command-arm killers (`test_shell_command_killers.py`):
+
+| Module | Mutants | Killed | Annotated | Hung | Survived |
+|---|---:|---:|---:|---:|---:|
+| `shell_syntax.py` | 834 | 776 → 797 | 7 | 30 | 21 → 0 |
+
+`tools/mutate.py --module shell_syntax` (test selection on, 90 s per mutant,
+2 workers, 1667 s) reported 21 survivors clustered in the `case`-pattern
+grouping of `_pipelines` and the `alias`/`trap`/`powershell` arms of
+`command()`. Each was re-run against `test_shell_command_killers.py`: all 21
+are now killed (every mutant's suite fails). The 7 annotated carry a
+`# no mutate:` reason (index arithmetic whose boundary the quote scanner
+already guarantees; an `Op` default read only on here-document operators). A
+`TIMEOUT` is noticed by the run, not an open item. No unannotated survivor
+remains.
 
 The diff gate earned its place on its first pull request: the CV-1 fix
 arrived with four surviving mutants on the new `mountinfo` read (bound

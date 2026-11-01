@@ -185,6 +185,32 @@ class CrossViewFixture(unittest.TestCase):
         self.assertEqual(finding["evidence"], {"mount_count": 2})
         self.assertEqual(finding["observations"][0]["mount_points"], ["/proc/4242", "/proc/4243/status"])
 
+    def test_unreadable_mountinfo_is_an_incompleteness_gap(self):
+        mountinfo = self.proc / "self/mountinfo"
+        mountinfo.chmod(0)
+        self.audit.uid = os.getuid()   # the file is ours: unreadable means PERMISSION_DENIED, not another account
+        try:
+            with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+                self.audit.crossview()
+        finally:
+            mountinfo.chmod(0o644)
+        row = self.row()
+        self.assertEqual(row["status"], "PARTIAL")
+        self.assertIn("PERMISSION_DENIED", row["reason_codes"])
+        self.assertNotIn("proc_pid_mounts", self.audit.stats["crossview"])
+
+    def test_oversized_mountinfo_is_truncation_not_silence(self):
+        line = "22 1 0:21 / /proc rw - proc proc rw\n"
+        bound = 4 * 1024 * 1024
+        body = (line * (bound // len(line) + 1))[:bound - 1] + "\n#"   # exactly one byte over the 4 MiB bound
+        self.assertEqual(len(body.encode()), bound + 1)
+        (self.proc / "self/mountinfo").write_text(body)
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        row = self.row()
+        self.assertEqual(row["status"], "PARTIAL")
+        self.assertIn("INPUT_TRUNCATED", row["reason_codes"])
+
     def test_budget_exhaustion_during_sweep_is_partial(self):
         self.write("/proc/sys/kernel/pid_max", "200000\n")
         self.audit.deadline = 0.0                  # already expired

@@ -160,12 +160,31 @@ class CrossViewFixture(unittest.TestCase):
         [finding] = [f for f in self.audit.findings if f["rule"] == "HIDDEN_LISTENER"]
         self.assertEqual(finding["evidence"], {"proto": "tcp", "port": 8080, "visible_in": "PROCFS_ONLY"})
 
-    def test_listener_in_ss_but_not_in_procfs_is_hidden(self):
+    def test_unconfirmed_netlink_only_socket_is_not_hidden(self):
         self.ss_output = 'udp UNCONN 0 0 0.0.0.0:4444 0.0.0.0:*\n'
         with patch.object(collectors, "PID_RECHECK_DELAY", 0):
             self.audit.crossview()
-        [finding] = [f for f in self.audit.findings if f["rule"] == "HIDDEN_LISTENER"]
-        self.assertEqual(finding["evidence"], {"proto": "udp", "port": 4444, "visible_in": "NETLINK_ONLY"})
+        self.assertNotIn("HIDDEN_LISTENER", self.rules())
+        self.assertEqual(self.audit.stats["crossview"]["listeners"]["unconfirmed_netlink_only"], 1)
+
+    def test_partial_ss_never_proves_absent_listener(self):
+        self.write("/proc/net/tcp", "sl local_address rem_address st\n"
+                   "0: 0100007F:1F90 00000000:0000 0A 0 0 0\n")
+        self.audit.command = lambda *a, **kw: {"status": "PARTIAL", "stdout": "",
+            "stderr": "", "exit": 0, "elapsed_ms": 1, "truncated": True, "error": ""}
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertNotIn("HIDDEN_LISTENER", self.rules())
+        self.assertEqual(self.row()["status"], "PARTIAL")
+        self.assertIn("INPUT_TRUNCATED", self.row()["reason_codes"])
+
+    def test_hidepid_is_scope_limit_not_hidden_process(self):
+        self.write("/proc/self/mountinfo", "22 1 0:21 / /proc rw,hidepid=2 - proc proc rw\n")
+        self.exists.add(3500)
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertNotIn("HIDDEN_PROCESS", self.rules())
+        self.assertIn("OTHER_ACCOUNTS_NOT_VISIBLE", self.row()["scope_limits"])
 
     def test_matching_listeners_are_silent(self):
         self.write("/proc/net/tcp6", "  sl  local_address rem_address st\n"

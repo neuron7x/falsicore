@@ -118,6 +118,8 @@ def _balanced(text: str, i: int, opener: str = "(", closer: str = ")", nesting: 
             continue
         if c == opener:
             depth += 1
+            if depth >= MAX_LEX_NESTING:
+                raise _NestingLimit
         elif c == closer:
             depth -= 1
             if depth == 0:

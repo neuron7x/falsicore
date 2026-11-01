@@ -344,8 +344,10 @@ def interpret_verdict(findings: list[dict], coverage: list[dict]) -> str:
     # On an offline image the live-only checks are declared, not missing: the
     # verdict then speaks about the disk, and the coverage rows say so.
     offline = {x.get("check") for x in coverage
-               if "LIVE_ONLY_NOT_IN_OFFLINE_IMAGE" in (x.get("reason_codes") or {}) or
-               "LIVE_ONLY_NOT_IN_OFFLINE_IMAGE" in (x.get("scope_limits") or {})}
+               if x.get("status") == "SKIPPED" and x.get("check") in
+               {"processes", "network", "crossview"} and (
+                   "LIVE_ONLY_NOT_IN_OFFLINE_IMAGE" in (x.get("reason_codes") or {}) or
+                   "LIVE_ONLY_NOT_IN_OFFLINE_IMAGE" in (x.get("scope_limits") or {}))}
     essential -= offline
     incomplete = [x for x in coverage if x.get("check") in essential and x.get("status") != "COMPLETED"]
     observed = {x.get("check") for x in coverage}

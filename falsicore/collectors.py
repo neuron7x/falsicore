@@ -103,7 +103,7 @@ SCOPE_LIMIT_CODES = {
 RELAY_PROGRAMS = frozenset({
     "cat", "echo", "printf", "head", "tail", "sed", "awk", "gawk", "mawk", "tr", "cut", "tee", "xargs", "env",
     "sh", "bash", "dash", "zsh", "python", "python3", "perl", "ruby", "node", "base64", "xxd", "od", "rev",
-    "sort", "uniq", "grep", "egrep", "fgrep", "find", "curl", "wget", "nc", "ncat", "socat", "ssh", "sudo", "doas",
+    "sort", "uniq", "grep", "egrep", "fgrep", "find", "curl", "wget", "nc", "ncat", "socat", "ssh", "sudo", "doas", "dd",
     "zcat", "gunzip", "bzcat", "xzcat", "openssl", "gpg", "eval", "exec", "command", "source", ".",
 })
 PROGRAM_DIRS = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
@@ -1149,7 +1149,14 @@ class Audit:
         $PATH, never /usr/local); relay programs (cat, sed, sh, …) never qualify,
         because their output is their input.
         """
-        base = PurePosixPath(name).name
+        # Never alias ./prog, ../prog, or path/prog to /usr/bin/prog.
+        # A relative path is an execution target, not a PATH lookup name.
+        if not name or ("/" in name and not name.startswith("/")):
+            return None
+        canonical = PurePosixPath(name)
+        if name.startswith("/") and (str(canonical) != name or str(canonical.parent) not in PROGRAM_DIRS):
+            return None
+        base = canonical.name
         if not base or base in RELAY_PROGRAMS or base in {"[", "test", "true", "false"}:
             return None
         candidates = [self.sys(name)] if name.startswith("/") else [self.sys(d) / base for d in PROGRAM_DIRS]
@@ -1199,7 +1206,11 @@ class Audit:
         """Resolve a literal source/. operand: ~/, $HOME/ and ${HOME}/ forms only."""
         for prefix in ("~/", "\x00VAR:HOME\x00/"):
             if target.startswith(prefix):
-                return self.home / target[len(prefix):]
+                suffix = target[len(prefix):].lstrip("/")
+                components = PurePosixPath(suffix).parts
+                if not components or any(part in (".", "..") for part in components):
+                    return None
+                return self.home.joinpath(*components)
         if "\x00" in target or not target.startswith("/"):
             return None
         # An absolute operand names a file of the inspected system: resolve it
@@ -1853,7 +1864,13 @@ class Audit:
         prefix: list[str] = []
         if self.offline:
             journal_dir = self.sys("/var/log/journal")
-            if not journal_dir.is_dir() or journal_dir.is_symlink():
+            # journalctl resolves its own pathname. Reject symlinks in every
+            # ancestor rather than checking only the final directory.
+            # The image must additionally be mounted read-only to eliminate
+            # path-swap races between this preflight and journalctl.
+            if (not journal_dir.is_dir() or
+                    any(part.is_symlink() for part in (journal_dir, *journal_dir.parents)
+                        if part != part.parent)):
                 return {"status": "UNAVAILABLE", "stdout": "", "stderr": "", "exit": None, "elapsed_ms": 0,
                         "truncated": False, "error": "no journal directory in image", "residual_killed": False}
             prefix = [f"--directory={journal_dir.absolute().as_posix()}"]
@@ -2018,6 +2035,19 @@ class Audit:
         return int(m.group(1)) if m else "UNREADABLE"
 
     def _hidden_processes(self, gaps: Gaps, stats: dict[str, Any]) -> None:
+        # hidepid is a documented access restriction, not evidence of
+        # malicious kernel filtering. Do not promote EPERM to a rootkit alarm.
+        if self.scope == "user":
+            mounts, status = safe_read(self._proc_self() / "mountinfo", 4 * 1024 * 1024)
+            if mounts is not None and any(
+                len(fields) > 5 and fields[4] == "/proc" and
+                re.search(r"(?:^|,)hidepid=(?:1|2|invisible|ptraceable)(?:,|$)", fields[5])
+                for line in mounts.decode("utf-8", "replace").splitlines()
+                for fields in [line.split()]
+            ):
+                gaps.add("OTHER_ACCOUNTS_NOT_VISIBLE")
+                stats["processes"] = {"status": "HIDEPID_RESTRICTED", "hidden": 0, "pid_max_probed": 0}
+                return
         listed, tids = self._listed_pids_and_tids()
         raw, _ = safe_read(self.proc_root / "sys/kernel/pid_max", 64)
         try:
@@ -2114,8 +2144,12 @@ class Audit:
             gaps.add("READ_FAILED")
             return
         r = self.command("ss", ["-H", "-tuna", "-p"], timeout=15)
-        if r["status"] not in ("COMPLETED", "PARTIAL"):
+        if r["status"] != "COMPLETED" or r.get("truncated"):
+            # Negative inference from a partial ss table fabricates hidden
+            # listeners. Only a complete command result can be compared.
             self.command_gap(r, gaps)
+            if r["status"] == "PARTIAL":
+                gaps.add("INPUT_TRUNCATED")
             return
         netlink: set[tuple[str, int]] = set()
         for sock in d.parse_ss(r["stdout"]):
@@ -2124,19 +2158,17 @@ class Audit:
         after = self._procnet_listeners() or set()
         stable = before & after                      # present across the ss call: not a race
         procfs_only = sorted(stable - netlink)
-        netlink_only = sorted(netlink - before - after)
+        # A netlink socket absent both before and after is consistent with
+        # legitimate transient churn; a single ss snapshot cannot prove hiding.
+        unconfirmed_netlink_only = sorted(netlink - before - after)
         for proto, port in procfs_only[:50]:
             self.finding("HIDDEN_LISTENER", "high",
                          "A listening socket appears in /proc/net but not in the netlink socket table (ss); "
                          "one of the two views is being filtered", "crossview://listeners",
                          {"proto": proto, "port": port, "visible_in": "PROCFS_ONLY"}, attack="T1014")
-        for proto, port in netlink_only[:50]:
-            self.finding("HIDDEN_LISTENER", "high",
-                         "A listening socket appears in the netlink socket table (ss) but not in /proc/net; "
-                         "one of the two views is being filtered", "crossview://listeners",
-                         {"proto": proto, "port": port, "visible_in": "NETLINK_ONLY"}, attack="T1014")
         stats["listeners"] = {"procfs": len(stable), "netlink": len(netlink),
-                              "procfs_only": len(procfs_only), "netlink_only": len(netlink_only)}
+                              "procfs_only": len(procfs_only),
+                              "unconfirmed_netlink_only": len(unconfirmed_netlink_only)}
 
     def _proc_mount_overlays(self, gaps: Gaps, stats: dict[str, Any]) -> None:
         mountinfo = self._proc_self() / "mountinfo"

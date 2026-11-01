@@ -106,6 +106,9 @@ RELAY_PROGRAMS = frozenset({
     "sort", "uniq", "grep", "egrep", "fgrep", "find", "curl", "wget", "nc", "ncat", "socat", "ssh", "sudo", "doas", "dd",
     "zcat", "gunzip", "bzcat", "xzcat", "openssl", "gpg", "eval", "exec", "command", "source", ".",
 })
+# Explicit, narrow trust exceptions for transparent package-managed generators.
+# Attestation remains an assumption about emitted content, not its verification.
+ATTESTABLE_GENERATORS = frozenset({"dircolors", "lesspipe"})
 PROGRAM_DIRS = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 LIVE_ONLY_COLLECTORS = ("processes", "network", "kernel", "crossview")
 # Probes that may run against an offline image: journalctl reading the image's own journal directory.
@@ -1157,7 +1160,7 @@ class Audit:
         if name.startswith("/") and (str(canonical) != name or str(canonical.parent) not in PROGRAM_DIRS):
             return None
         base = canonical.name
-        if not base or base in RELAY_PROGRAMS or base in {"[", "test", "true", "false"}:
+        if not base or base not in ATTESTABLE_GENERATORS or base in RELAY_PROGRAMS:
             return None
         candidates = [self.sys(name)] if name.startswith("/") else [self.sys(d) / base for d in PROGRAM_DIRS]
         for path in candidates:
@@ -1184,8 +1187,9 @@ class Audit:
         if isinstance(path, Path) and content is not None and self.package_attested(path, content):
             gaps.add("PACKAGE_ATTESTED_NOT_PARSED")
             return
-        programs = analysis.get("evaluated_programs", [])
+        programs = analysis.get("qualified_eval_sites", [])
         if (limitations == ["EXPANSION_NOT_RESOLVED"] and programs
+                and analysis.get("unresolved_non_eval_sites", 1) == 0
                 and analysis.get("unresolved_expansions") == len(programs)
                 and all(self._attested_program(p) is not None for p in programs)):
             gaps.add("EVAL_OF_ATTESTED_PROGRAM_OUTPUT")

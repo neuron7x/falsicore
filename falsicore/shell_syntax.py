@@ -516,11 +516,17 @@ class _Analysis:
         self.literal_heads: list[str] = []         # literal program words of this run's simple commands
         self.unresolved = 0                        # sites that produced EXPANSION_NOT_RESOLVED
         self._sub_heads: list[str] = []            # literal heads of the current command's own $(...)
+        self.qualified_eval_sites: list[str] = []
+        self.unresolved_non_eval_sites = 0
         self._word_sources: dict[int, set[str]] = {}  # taint belongs to its exact argument
 
-    def unresolved_site(self) -> None:
+    def unresolved_site(self, evaluated_program: str | None = None) -> None:
         self.gaps.add("EXPANSION_NOT_RESOLVED")
         self.unresolved += 1
+        if evaluated_program is None:
+            self.unresolved_non_eval_sites += 1
+        else:
+            self.qualified_eval_sites.append(evaluated_program)
 
     def found(self, rules: set[str], line: int) -> None:
         if rules:
@@ -533,6 +539,8 @@ class _Analysis:
         self.found(sub.patterns, line)
         self.evaluated_programs.extend(sub.evaluated_programs)
         self.unresolved += sub.unresolved
+        self.qualified_eval_sites.extend(sub.qualified_eval_sites)
+        self.unresolved_non_eval_sites += sub.unresolved_non_eval_sites
         return sub
 
     def value(self, name: str, value: str, word: Word) -> None:
@@ -630,9 +638,12 @@ class _Analysis:
             return "", False
         if name == "eval":
             if any(w.expands for w in args):
-                self.unresolved_site()
-                # eval "$(prog args)": the code is prog's output. The caller may
-                # decide what it trusts about prog; here it is only recorded.
+                # Counts over a whole file are not evidence about this site.
+                # Only an isolated, single command-substitution operand with
+                # exactly one literal producer is eligible for trust review.
+                eligible = (len(args) == 1 and args[0].text == "\x00SUB\x00"
+                            and len(args[0].subs) == 1 and len(sub_heads) == 1 and not sub_emits)
+                self.unresolved_site(sub_heads[0] if eligible else None)
                 if sub_heads and not sub_emits:
                     self.evaluated_programs.extend(sub_heads)
             # eval "$(curl ...)": the evaluated string is the download itself.
@@ -780,4 +791,6 @@ def analyze(text: str, depth: int = 0) -> dict:
             "limitations": sorted(result.gaps),
             "sourced": result.sourced,
             "evaluated_programs": result.evaluated_programs,
+            "qualified_eval_sites": result.qualified_eval_sites,
+            "unresolved_non_eval_sites": result.unresolved_non_eval_sites,
             "unresolved_expansions": result.unresolved}

@@ -92,9 +92,12 @@ def defects(receipt: dict) -> list[str]:
         return problems + ["no-measurements"]
     suite = evidence.get("suite", {})
     if not isinstance(suite, dict) or (
-        suite.get("exit") != 0 or not isinstance(suite.get("ran"), int)
-        or suite["ran"] <= 0 or suite.get("errors") != 0 or suite.get("failed") != 0
-        or suite.get("test_files") != len(list((ROOT / "tests").glob("test_*.py")))
+        type(suite.get("exit")) is not int or suite["exit"] != 0
+        or type(suite.get("ran")) is not int or suite["ran"] <= 0
+        or any(type(suite.get(field)) is not int or suite[field] != 0
+               for field in ("errors", "failed", "skipped"))
+        or type(suite.get("test_files")) is not int
+        or suite["test_files"] != len(list((ROOT / "tests").glob("test_*.py")))
     ):
         problems.append("suite")
     coverage = evidence.get("coverage", {})
@@ -119,7 +122,7 @@ def defects(receipt: dict) -> list[str]:
         static = {}
     for key in REQUIRED_STATIC:
         row = static.get(key)
-        if not isinstance(row, dict) or row.get("exit") != 0:
+        if not isinstance(row, dict) or type(row.get("exit")) is not int or row["exit"] != 0:
             problems.append("static:" + key)
     validity = evidence.get("detection_validity", {})
     if (not isinstance(validity, dict) or validity.get("passes") is not True

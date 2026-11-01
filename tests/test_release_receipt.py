@@ -19,7 +19,7 @@ class Gate(unittest.TestCase):
             "git_head_sha": "c" * 40,
             "head_consistent": True,
             "measurements": {
-                "suite": {"exit": 0, "ran": 900, "failed": 0, "errors": 0,
+                "suite": {"exit": 0, "ran": 900, "failed": 0, "errors": 0, "skipped": 0,
                           "test_files": len(list(c.glob("test_*.py")))},
                 "coverage": {"run_exit": 0, "json_exit": 0,
                              "num_statements": 100, "covered_lines": 92,
@@ -84,6 +84,27 @@ class Gate(unittest.TestCase):
             invoke.side_effect = g.subprocess.TimeoutExpired(
                 cmd="/usr/bin/git", timeout=10)
             self.assertIsNone(g.repository_head())
+
+    def test_suite_cannot_claim_pass_with_skips_or_boolean_measurements(self):
+        # Previously skipped>0, missing skipped, and bool-valued zero exits
+        # could pass because Python considers False == 0 and True an int.
+        for field, bad in (("skipped", 1), ("skipped", None),
+                           ("skipped", False), ("exit", False),
+                           ("ran", True), ("errors", False), ("failed", False)):
+            document = self.make()
+            document["measurements"]["suite"][field] = bad
+            with self.subTest(field=field, bad=bad):
+                self.assertIn("suite", self.defects(document))
+        missing = self.make()
+        del missing["measurements"]["suite"]["skipped"]
+        self.assertIn("suite", self.defects(missing))
+
+    def test_static_success_requires_integer_zero_not_boolean_false(self):
+        for key in g.REQUIRED_STATIC:
+            receipt = self.make()
+            receipt["measurements"]["static_analysis"][key]["exit"] = False
+            with self.subTest(tool=key):
+                self.assertIn("static:" + key, self.defects(receipt))
 
     def test_stale_suite_coverage_and_ancillary_fails_closed(self):
         for mode in ("tests", "coverage", "static", "validity"):

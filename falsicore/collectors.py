@@ -259,8 +259,9 @@ def _proc_listener_endpoint(table: str, field: str) -> tuple[str, str, int] | No
     No raw local address is ever emitted into a persisted finding.
     """
     addr, sep, port = field.partition(":")
-    width = 32 if table.endswith("6") else 8
-    if not sep or len(addr) != width or not re.fullmatch(r"[0-9A-Fa-f]+", addr):
+    # bytes.fromhex plus ipaddress validate both hex syntax and exact
+    # address width. Repeating these checks here did not strengthen safety.
+    if not sep:
         return None
     if not re.fullmatch(r"[0-9A-Fa-f]{4}", port):
         return None
@@ -268,7 +269,7 @@ def _proc_listener_endpoint(table: str, field: str) -> tuple[str, str, int] | No
         raw = bytes.fromhex(addr)
         if table.endswith("6"):
             # Linux prints each 32-bit IPv6 word in little-endian order.
-            ordered = b"".join(raw[i:i + 4][::-1] for i in range(0, 16, 4))
+            ordered = b"".join(raw[i:i + 4][::-1] for i in range(0, len(raw), 4))
             host = str(ipaddress.IPv6Address(ordered))
             family = "6"
         else:
@@ -1284,7 +1285,7 @@ class Audit:
             return
         programs = analysis.get("qualified_eval_sites", [])
         if (limitations == ["EXPANSION_NOT_RESOLVED"] and programs
-                and analysis.get("unresolved_non_eval_sites", 1) == 0
+                and analysis.get("unresolved_non_eval_sites") == 0
                 and analysis.get("unresolved_expansions") == len(programs)
                 and all(self._attested_program(p) is not None for p in programs)):
             gaps.add("EVAL_OF_ATTESTED_PROGRAM_OUTPUT")
@@ -2137,8 +2138,19 @@ class Audit:
         # hidepid is a documented access restriction, not evidence of
         # malicious kernel filtering. Do not promote EPERM to a rootkit alarm.
         if self.scope == "user":
-            mounts, status = safe_read(self._proc_self() / "mountinfo", 4 * 1024 * 1024)
-            if mounts is not None and any(
+            mountinfo = self._proc_self() / "mountinfo"
+            mounts, status = safe_read(mountinfo, 4 * 1024 * 1024)
+            if mounts is None:
+                # Without mount visibility, EPERM from kill(pid, 0) is not
+                # evidence of a hidden process. Refuse negative inference when
+                # procfs access policy is unknown or the input is truncated.
+                self.read_gap(mountinfo, status, gaps)
+                if status == "ABSENT":
+                    gaps.add("READ_FAILED")
+                stats["processes"] = {"status": "MOUNT_VISIBILITY_UNAVAILABLE",
+                                      "hidden": 0, "pid_max_probed": 0}
+                return
+            if any(
                 len(fields) > 5 and fields[4] == "/proc" and
                 re.search(r"(?:^|,)hidepid=(?:1|2|invisible|ptraceable)(?:,|$)", fields[5])
                 for line in mounts.decode("utf-8", "replace").splitlines()

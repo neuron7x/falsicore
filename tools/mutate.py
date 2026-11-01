@@ -17,6 +17,7 @@ gate kills nothing by accident.
     python3 tools/mutate.py --diff origin/main        # mutants on changed lines only (PR gate)
     python3 tools/mutate.py --module detectors        # one module
     python3 tools/mutate.py --all --workers 4         # whole package (weekly)
+    python3 tools/mutate.py --retry run.json          # only the open items of an earlier result
     python3 tools/mutate.py --coverage               # record the per-test coverage contexts first
 
 Exit status 1 when a mutant survives or has no tests, unless its line carries
@@ -195,6 +196,31 @@ def generate(module: str, source: str, lines: set[int] | None = None) -> list[Mu
     return mutants
 
 
+# ---- retry ---------------------------------------------------------------------
+
+OPEN_STATUSES = ("SURVIVED", "NO_TESTS", "ERROR", "NOT_RUN")
+Signature = tuple[str, str, str]
+
+
+def open_signatures(result: dict) -> dict[str, set[Signature]]:
+    """(operator, original line, mutated text) of each open item of an earlier result, per module.
+
+    Lines move when unrelated code is edited; the signature does not, so a
+    killer-writing cycle re-runs exactly the mutants that were open. A line
+    that has since been annotated changes its text and drops out: the full run
+    reports it as ANNOTATED.
+    """
+    out: dict[str, set[Signature]] = {}
+    for m in result["mutants"]:
+        if m["status"] in OPEN_STATUSES:
+            out.setdefault(m["module"], set()).add((m["operator"], m["original"], m["mutated"]))
+    return out
+
+
+def retain(mutants: list[Mutant], signatures: set[Signature]) -> list[Mutant]:
+    return [m for m in mutants if (m.operator, m.original, m.mutated) in signatures]
+
+
 # ---- test selection ----------------------------------------------------------------
 def record_coverage_with_contexts(python: str = sys.executable) -> Path:
     """Run the suite once under coverage.py with per-test contexts; write COVERAGE_JSON."""
@@ -329,13 +355,16 @@ def parse_diff(out: str) -> dict[str, set[int]]:
 
 
 def run(modules: dict[str, set[int] | None], workers: int, timeout: float, python: str,
-        coverage_json: Path, budget: float | None) -> dict:
+        coverage_json: Path, budget: float | None, retry: dict[str, set[Signature]] | None = None) -> dict:
     started = time.monotonic()
     mutants: list[Mutant] = []
     selection: dict[str, dict[int, set[str]] | None] = {}
     for module, lines in sorted(modules.items()):
         source = (PACKAGE / f"{module}.py").read_text()
-        mutants.extend(generate(module, source, lines))
+        generated = generate(module, source, lines)
+        if retry is not None:
+            generated = retain(generated, retry.get(module, set()))
+        mutants.extend(generated)
         selection[module] = covering_tests(coverage_json, module)
     with tempfile.TemporaryDirectory(prefix="falsicore-mutants-") as tmp:
         trees = [Path(tmp) / f"w{i}" for i in range(max(1, workers))]
@@ -394,6 +423,8 @@ def main(argv: list[str] | None = None) -> int:
     target.add_argument("--diff", metavar="BASE", help="mutate only lines changed since BASE (git ref)")
     target.add_argument("--module", action="append", help="mutate this module (repeatable)")
     target.add_argument("--all", action="store_true", help="mutate every runtime module")
+    target.add_argument("--retry", type=Path, metavar="RESULT",
+                        help="re-run only the open items of an earlier --json result, matched by operator and source text, not line")
     parser.add_argument("--coverage", action="store_true", help="record per-test coverage contexts, then exit")
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--timeout", type=float, default=180.0, help="seconds per mutant")
@@ -406,21 +437,28 @@ def main(argv: list[str] | None = None) -> int:
         record_coverage_with_contexts()
         print(f"coverage contexts written to {COVERAGE_JSON.relative_to(ROOT)}")
         return 0
+    retry: dict[str, set[Signature]] | None = None
     if args.diff:
         modules: dict[str, set[int] | None] = dict(changed_lines(args.diff))
         if not modules:
             print("no changed lines in falsicore/: nothing to mutate")
+            return 0
+    elif args.retry:
+        retry = open_signatures(json.loads(args.retry.read_text()))
+        modules = {m: None for m in retry}
+        if not modules:
+            print("no open items in the earlier result: nothing to retry")
             return 0
     elif args.module:
         modules = {m: None for m in args.module}
     elif args.all:
         modules = {p.stem: None for p in sorted(PACKAGE.glob("*.py")) if p.stem != "__init__"}
     else:
-        parser.error("one of --diff, --module, --all, --coverage is required")
+        parser.error("one of --diff, --retry, --module, --all, --coverage is required")
     if not COVERAGE_JSON.is_file():
         print("no coverage contexts (.mutation/coverage.json): running the whole suite per mutant; "
               "use --coverage first for test selection", file=sys.stderr)
-    result = run(modules, args.workers, args.timeout, sys.executable, COVERAGE_JSON, args.budget)
+    result = run(modules, args.workers, args.timeout, sys.executable, COVERAGE_JSON, args.budget, retry)
     encoded = json.dumps(result, indent=2, ensure_ascii=False) + "\n"
     if args.json:
         args.json.write_text(encoded)

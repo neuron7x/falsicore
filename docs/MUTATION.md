@@ -27,6 +27,7 @@ python3 tools/mutate.py --coverage               # record per-test contexts (onc
 python3 tools/mutate.py --diff origin/main        # the pull-request gate: mutants on changed lines only
 python3 tools/mutate.py --module detectors        # one module
 python3 tools/mutate.py --all --workers 4         # the weekly whole-package run
+python3 tools/mutate.py --retry run.json          # only the open items of an earlier --json result (killer-writing cycle)
 ```
 
 Exit status 1 when a mutant `SURVIVED`, has `NO_TESTS`, timed out or errored.

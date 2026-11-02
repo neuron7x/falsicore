@@ -121,6 +121,73 @@ class CrossViewFixture(unittest.TestCase):
         self.assertEqual(self.row()["status"], "PARTIAL")
         self.assertIn("READ_FAILED", self.row()["reason_codes"])
 
+
+    def test_known_listed_and_tid_only_pids_are_not_reprobed(self):
+        # Cross-view candidates are strictly absent from both procfs lists.
+        seen: set[int] = set()
+
+        def probe(pid: int) -> bool:
+            seen.add(pid)
+            return pid in self.exists
+
+        self.audit.pid_probe = probe
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertTrue({1, 1200, 1201, 1202}.isdisjoint(seen))
+        self.assertEqual(self.audit.stats["crossview"]["processes"]["candidates"], 0)
+
+    def test_unknown_initial_probe_preserves_later_confirmed_finding(self):
+        self.exists.add(3500)
+        self.audit.pid_probe = lambda pid: None if pid == 3000 else pid in self.exists
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertEqual(self.audit.stats["crossview"]["processes"]["pid_max_probed"], 4096)
+        hidden = [f for f in self.audit.findings if f["rule"] == "HIDDEN_PROCESS"]
+        self.assertEqual(len(hidden), 1)
+        self.assertEqual(hidden[0]["observations"][0]["pid"], 3500)
+        self.assertEqual(self.row()["status"], "PARTIAL")
+        self.assertIn("READ_FAILED", self.row()["reason_codes"])
+
+    def test_relisted_candidate_does_not_truncate_later_confirmations(self):
+        self.exists.update({3100, 3500})
+        real_listing = self.audit._listed_pids_and_tids
+        calls = {"count": 0}
+
+        def listing():
+            calls["count"] += 1
+            listed, tids = real_listing()
+            if calls["count"] >= 2:
+                listed.add(3100)
+            return listed, tids
+
+        self.audit._listed_pids_and_tids = listing
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertEqual(calls["count"], 2)
+        hidden = [f for f in self.audit.findings if f["rule"] == "HIDDEN_PROCESS"]
+        self.assertEqual(len(hidden), 1)
+        self.assertEqual(hidden[0]["observations"][0]["pid"], 3500)
+
+    def test_unknown_recheck_does_not_truncate_later_confirmations(self):
+        self.exists.update({3000, 3500})
+        calls = {"count": 0}
+
+        def probe(pid: int) -> bool | None:
+            if pid == 3000:
+                calls["count"] += 1
+                return True if calls["count"] == 1 else None
+            return pid in self.exists
+
+        self.audit.pid_probe = probe
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertEqual(calls["count"], 2)
+        hidden = [f for f in self.audit.findings if f["rule"] == "HIDDEN_PROCESS"]
+        self.assertEqual(len(hidden), 1)
+        self.assertEqual(hidden[0]["observations"][0]["pid"], 3500)
+        self.assertEqual(self.row()["status"], "PARTIAL")
+        self.assertIn("READ_FAILED", self.row()["reason_codes"])
+
     def test_threads_are_not_hidden_processes(self):
         self.exists.add(1203)                      # a thread born after the listing: Tgid != pid
         self.process(1203, tgid=1200)

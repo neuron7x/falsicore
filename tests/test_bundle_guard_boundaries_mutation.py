@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from zipfile import ZipFile
 
 from falsicore import bundle
@@ -77,10 +79,22 @@ class BundleExportParentPermissions(unittest.TestCase):
         self.assertFalse(self.destination.exists())
 
     def test_world_writable_parent_is_rejected_without_export(self):
-        self.parent.chmod(0o757)
-        with self.assertRaisesRegex(PermissionError, "Export parent"):
-            bundle.export_source({"README.txt": b"data"}, self.destination)
+        # Emulate hostile metadata instead of temporarily opening an actual
+        # world-writable directory, even within a private test sandbox.
+        self.parent.chmod(0o755)
+        actual_stat = Path.stat
+
+        def world_writable_metadata(path, *args, **kwargs):
+            info = actual_stat(path, *args, **kwargs)
+            if path == self.parent:
+                return os.stat_result((info.st_mode | stat.S_IWOTH, *tuple(info)[1:]))
+            return info
+
+        with patch.object(Path, "stat", world_writable_metadata):
+            with self.assertRaisesRegex(PermissionError, "Export parent"):
+                bundle.export_source({"README.txt": b"data"}, self.destination)
         self.assertFalse(self.destination.exists())
+        self.assertEqual(stat.S_IMODE(self.parent.stat().st_mode), 0o755)
 
 
 if __name__ == "__main__":

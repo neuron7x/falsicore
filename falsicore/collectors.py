@@ -987,7 +987,10 @@ class Audit:
         Runs after all collectors so a rolled-back network collector cannot leave
         a half-applied correlation; without a network observation it says UNKNOWN.
         """
-        network_ok = any(c["check"] == "network" and c["status"] in ("COMPLETED", "PARTIAL") for c in self.coverage)
+        network_rows = [c for c in self.coverage if c["check"] == "network"]
+        network_state = network_rows[-1]["status"] if network_rows else None
+        network_ok = network_state in ("COMPLETED", "PARTIAL")
+        network_complete = network_state == "COMPLETED"
         listeners = getattr(self, "listening_ports", {}) if network_ok else None
         for f in self.findings:
             ev = f.get("evidence", {})
@@ -996,7 +999,8 @@ class Audit:
             if listeners is None or ev["debug_port"] == "INVALID":
                 ev["debug_port_listener"] = "UNKNOWN"
             elif ev["debug_port"] not in listeners:
-                ev["debug_port_listener"] = "NOT_OBSERVED"
+                # Partial ss output can establish a seen listener, never its absence.
+                ev["debug_port_listener"] = "NOT_OBSERVED" if network_complete else "UNKNOWN"
             elif listeners[ev["debug_port"]] <= {"loopback"}:
                 ev["debug_port_listener"] = "LISTENING_LOOPBACK_ONLY"
             else:

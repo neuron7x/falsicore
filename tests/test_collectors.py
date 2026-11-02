@@ -137,6 +137,55 @@ class CollectorFixtureTests(unittest.TestCase):
         self.a.network()
         self.assertEqual(self.a.coverage[-1]["status"], "UNAVAILABLE")
 
+
+    def _debug_port_ss_case(self, status, output, *, truncated=False):
+        evidence = {"debug_port": "9222", "debug_port_listener": "NOT_CORRELATED"}
+        self.a.findings.append({"rule": "UNSAFE_BROWSER_LAUNCH_FLAG", "evidence": evidence})
+        self.a.command = lambda *_args, **_kwargs: {
+            "status": status, "stdout": output, "exit": 0,
+            "elapsed_ms": 1, "truncated": truncated, "error": "truncated" if truncated else "",
+        }
+        self.a.network()
+        self.a._correlate_debug_ports()
+        return evidence, self.a.coverage[-1]
+
+    def test_truncated_ss_cannot_claim_debug_listener_absent(self):
+        evidence, coverage = self._debug_port_ss_case("PARTIAL", "", truncated=True)
+        self.assertEqual(coverage["status"], "PARTIAL")
+        self.assertIn("INPUT_TRUNCATED", coverage["reason_codes"])
+        self.assertEqual(evidence["debug_port_listener"], "UNKNOWN")
+
+    def test_partial_established_socket_cannot_claim_debug_listener_absent(self):
+        evidence, coverage = self._debug_port_ss_case(
+            "PARTIAL", "tcp ESTAB 0 0 127.0.0.1:9222 198.51.100.20:443\n", truncated=True,
+        )
+        self.assertEqual(coverage["status"], "PARTIAL")
+        self.assertNotIn("9222", self.a.listening_ports)
+        self.assertEqual(evidence["debug_port_listener"], "UNKNOWN")
+
+    def test_partial_ss_retains_positive_debug_listener(self):
+        evidence, coverage = self._debug_port_ss_case(
+            "PARTIAL", "tcp LISTEN 0 128 0.0.0.0:9222 0.0.0.0:*\n", truncated=True,
+        )
+        self.assertEqual(coverage["status"], "PARTIAL")
+        self.assertEqual(self.a.listening_ports["9222"], {"wildcard"})
+        self.assertEqual(evidence["debug_port_listener"], "LISTENING_BEYOND_LOOPBACK")
+
+    def test_complete_ss_loopback_listener_is_benign_twin(self):
+        evidence, coverage = self._debug_port_ss_case(
+            "COMPLETED", "tcp LISTEN 0 128 127.0.0.1:9222 0.0.0.0:*\n",
+        )
+        self.assertEqual(coverage["status"], "COMPLETED")
+        self.assertEqual(evidence["debug_port_listener"], "LISTENING_LOOPBACK_ONLY")
+
+    def test_complete_established_socket_is_not_debug_listener(self):
+        evidence, coverage = self._debug_port_ss_case(
+            "COMPLETED", "tcp ESTAB 0 0 127.0.0.1:9222 198.51.100.20:443\n",
+        )
+        self.assertEqual(coverage["status"], "COMPLETED")
+        self.assertNotIn("9222", self.a.listening_ports)
+        self.assertEqual(evidence["debug_port_listener"], "NOT_OBSERVED")
+
     def test_persistence_systemd_shell_and_authorized_keys(self):
         unit = self.home / ".config/systemd/user/sus.service"
         key = self.home / ".ssh/authorized_keys"

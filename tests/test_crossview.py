@@ -188,6 +188,37 @@ class CrossViewFixture(unittest.TestCase):
         self.assertEqual(self.row()["status"], "PARTIAL")
         self.assertIn("READ_FAILED", self.row()["reason_codes"])
 
+    def test_disappeared_confirmation_preserves_later_confirmed_pid(self):
+        # An early transient candidate disappearing on recheck must not end
+        # the confirmation sweep and hide an unrelated stable discrepancy.
+        self.exists.update({3000, 3500})
+        calls = {"first": 0}
+
+        def probe(pid):
+            if pid == 3000:
+                calls["first"] += 1
+                return calls["first"] == 1
+            return pid in self.exists
+
+        self.audit.pid_probe = probe
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertEqual(calls["first"], 2)
+        hidden = [f for f in self.audit.findings if f["rule"] == "HIDDEN_PROCESS"]
+        self.assertEqual(len(hidden), 1)
+        self.assertEqual([o["pid"] for o in hidden[0]["observations"]], [3500])
+
+    def test_thread_candidate_preserves_later_stable_hidden_pid(self):
+        # A new thread is an expected cross-view rival, not a reason to
+        # abandon confirming a separate PID further into the candidate list.
+        self.exists.update({3000, 3500})
+        self.audit._tgid_of = lambda pid: 1200 if pid == 3000 else None
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        hidden = [f for f in self.audit.findings if f["rule"] == "HIDDEN_PROCESS"]
+        self.assertEqual(len(hidden), 1)
+        self.assertEqual([o["pid"] for o in hidden[0]["observations"]], [3500])
+
     def test_threads_are_not_hidden_processes(self):
         self.exists.add(1203)                      # a thread born after the listing: Tgid != pid
         self.process(1203, tgid=1200)

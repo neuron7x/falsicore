@@ -235,6 +235,31 @@ class CollectorFixtureTests(unittest.TestCase):
         self.assertEqual(self.a.stats["network"]["malformed_rows"], 0)
         self.assertEqual(evidence["debug_port_listener"], "LISTENING_LOOPBACK_ONLY")
 
+    def test_misspelled_tcp_state_cannot_prove_debug_listener_absent(self):
+        evidence, coverage = self._debug_port_ss_case(
+            "COMPLETED", "tcp LSTEN 0 128 127.0.0.1:9222 0.0.0.0:*\n",
+        )
+        self.assertEqual(coverage["status"], "PARTIAL")
+        self.assertEqual(coverage["reason_codes"]["MALFORMED_INPUT"], 1)
+        self.assertEqual(self.a.stats["network"]["malformed_rows"], 1)
+        self.assertEqual(evidence["debug_port_listener"], "UNKNOWN")
+
+    def test_unknown_tcp_state_is_explicitly_incomplete(self):
+        evidence, coverage = self._debug_port_ss_case(
+            "COMPLETED", "tcp UNRECOGNIZED 0 128 127.0.0.1:9222 0.0.0.0:*\n",
+        )
+        self.assertEqual(coverage["status"], "PARTIAL")
+        self.assertEqual(coverage["reason_codes"]["MALFORMED_INPUT"], 1)
+        self.assertEqual(evidence["debug_port_listener"], "UNKNOWN")
+
+    def test_valid_transient_tcp_state_is_benign_twin(self):
+        evidence, coverage = self._debug_port_ss_case(
+            "COMPLETED", "tcp SYN-SENT 0 0 127.0.0.1:9222 198.51.100.20:443\n",
+        )
+        self.assertEqual(coverage["status"], "COMPLETED")
+        self.assertEqual(coverage["reason_codes"], {})
+        self.assertEqual(evidence["debug_port_listener"], "NOT_OBSERVED")
+
     def test_persistence_systemd_shell_and_authorized_keys(self):
         unit = self.home / ".config/systemd/user/sus.service"
         key = self.home / ".ssh/authorized_keys"

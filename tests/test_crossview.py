@@ -195,6 +195,24 @@ class CrossViewFixture(unittest.TestCase):
         self.assertEqual(self.row()["status"], "PARTIAL")
         self.assertIn("INPUT_TRUNCATED", self.row()["reason_codes"])
 
+    def _assert_unparseable_ss_does_not_report_hidden_listener(self, output):
+        self.write("/proc/net/tcp", "sl local_address rem_address st\n"
+                   "0: 0100007F:2406 00000000:0000 0A 0 0 0\n")
+        self.ss_output = output
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertNotIn("HIDDEN_LISTENER", self.rules())
+        self.assertEqual(self.row()["status"], "PARTIAL")
+        self.assertIn("PARSE_UNSUPPORTED", self.row()["reason_codes"])
+
+    def test_unknown_ss_state_does_not_invent_hidden_socket(self):
+        self._assert_unparseable_ss_does_not_report_hidden_listener(
+            "tcp LSTEN 0 128 127.0.0.1:9222 0.0.0.0:*\n",
+        )
+
+    def test_short_nonlistener_ss_row_does_not_invent_hidden_socket(self):
+        self._assert_unparseable_ss_does_not_report_hidden_listener("tcp ESTAB\n")
+
     def test_hidepid_is_scope_limit_not_hidden_process(self):
         self.write("/proc/self/mountinfo", "22 1 0:21 / /proc rw,hidepid=2 - proc proc rw\n")
         self.exists.add(3500)

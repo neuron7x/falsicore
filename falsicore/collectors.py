@@ -293,13 +293,12 @@ def _ss_listener_endpoints(output: str) -> set[tuple[str, str, int]] | None:
             continue
         if fields[0] not in ("tcp", "udp", "tcp6", "udp6"):
             continue
-        # A truncated known-protocol row is not proof of socket absence.
-        if len(fields) < 2:
+        # Even a non-listener row must be complete and recognizable: a
+        # corrupted state field can otherwise fabricate a PROCFS_ONLY alarm.
+        if len(fields) < 6 or not d.ss_state_supported(fields[0], fields[1]):
             return None
         if fields[1] not in ("LISTEN", "UNCONN"):
             continue
-        if len(fields) < 5:
-            return None
         addr, sep, port_text = fields[4].rpartition(":")
         if not sep or not re.fullmatch(r"[0-9]{1,5}", port_text):
             return None

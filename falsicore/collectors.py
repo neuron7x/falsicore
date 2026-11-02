@@ -627,9 +627,12 @@ class Audit:
                 return
             try:
                 progress(line)
-            # A UI callback must never alter collection, so any failure is swallowed.
-            except Exception:  # noqa: BLE001  # nosec B110
-                pass
+            # Progress failures are non-fatal, but must remain observable.
+            # Retain only the exception type; callbacks may contain private data.
+            except Exception as exc:
+                failed = self.stats.setdefault("progress_callback", {"failures": 0})
+                failed["failures"] += 1
+                failed["last_error"] = type(exc).__name__
         started = time.monotonic()
         self.deadline = started + self.max_seconds
         selected = [n for n in COLLECTOR_ORDER if n in self.profile_config["checks"]]

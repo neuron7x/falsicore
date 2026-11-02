@@ -82,6 +82,7 @@ class ScanProgressTests(unittest.TestCase):
             b.scan(progress=lambda _line: None)
         self.assertEqual(a.coverage, b.coverage)
         self.assertEqual(a.findings, b.findings)
+        self.assertNotIn("progress_callback", b.stats)
 
 
 class ProgressFailureIsolationTests(unittest.TestCase):
@@ -110,6 +111,8 @@ class ProgressFailureIsolationTests(unittest.TestCase):
         with patch.multiple(Audit, **{n: (lambda self, n=n: self.checked(n, "COMPLETED", "fixture")) for n in names}):
             audit.scan(progress=explode)
         self.assertEqual([c["check"] for c in audit.coverage if c["status"] == "COMPLETED"], list(names))
+        self.assertEqual(audit.stats["progress_callback"]["failures"], 2 * len(names))
+        self.assertEqual(audit.stats["progress_callback"]["last_error"], "BrokenPipeError")
 
     def test_keyboard_interrupt_returns_130_with_run_path(self):
         fake = SimpleNamespace(scope="user", target_user="fixture", home=None, profile_config={"checks": ()},

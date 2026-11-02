@@ -30,7 +30,7 @@ def read_verified_bundle(path: Path) -> dict[str, bytes]:
     # Pin the inode before preflight: re-opening a checked pathname permits
     # a symlink swap to substitute a different, self-consistently hashed ZIP.
     try:
-        source_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        source_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as exc:
         if exc.errno == errno.ELOOP:
             raise ValueError("Application must be a regular file, not a symlink") from exc

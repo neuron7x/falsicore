@@ -76,5 +76,25 @@ class BundlePinnedInodeControls(unittest.TestCase):
                 bundle.read_verified_bundle(self.primary)
 
 
+    def test_nonblocking_open_rejects_fifo_without_reader_or_writer(self):
+        # A FIFO must not stall the scanner before fstat can reject its type.
+        # Fail immediately on the old implementation instead of hanging CI.
+        fifo = self.primary.with_name("attacker.fifo")
+        bundle.os.mkfifo(fifo)
+        actual_open = bundle.os.open
+
+        def guarded_open(path, flags):
+            if not flags & bundle.os.O_NONBLOCK:
+                raise AssertionError("FIFO opening must use O_NONBLOCK")
+            if not flags & bundle.os.O_NOFOLLOW:
+                raise AssertionError("FIFO opening must reject symlinks")
+            return actual_open(path, flags)
+
+        with patch.object(bundle.os, "open", side_effect=guarded_open):
+            with self.assertRaisesRegex(ValueError, "regular file"):
+                bundle.read_verified_bundle(fifo)
+
+
+
 if __name__ == "__main__":
     unittest.main()

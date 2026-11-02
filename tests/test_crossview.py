@@ -80,6 +80,47 @@ class CrossViewFixture(unittest.TestCase):
         self.assertEqual(stats["processes"]["threads"], 4)
         self.assertEqual(stats["processes"]["pid_max_probed"], 4096)
 
+
+    def test_unexpected_pid_probe_oserror_is_unknown(self):
+        # A non-ESRCH, non-EPERM errno cannot certify kernel-level absence.
+        with patch.object(collectors.os, "kill", side_effect=OSError(5, "synthetic EIO")):
+            self.assertIsNone(collectors._live_pid_probe(3000))
+
+    def test_pid_probe_benign_absence_permission_and_success(self):
+        with patch.object(collectors.os, "kill", side_effect=ProcessLookupError()):
+            self.assertIs(collectors._live_pid_probe(3000), False)
+        with patch.object(collectors.os, "kill", side_effect=PermissionError()):
+            self.assertIs(collectors._live_pid_probe(3000), True)
+        with patch.object(collectors.os, "kill", return_value=None):
+            self.assertIs(collectors._live_pid_probe(3000), True)
+
+    def test_unknown_initial_pid_probe_requires_partial_coverage(self):
+        old_probe = self.audit.pid_probe
+        self.audit.pid_probe = lambda pid: None if pid == 3000 else old_probe(pid)
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertEqual(self.rules(), [])
+        self.assertEqual(self.row()["status"], "PARTIAL")
+        self.assertIn("READ_FAILED", self.row()["reason_codes"])
+
+    def test_unknown_confirmation_pid_probe_requires_partial_coverage(self):
+        old_probe = self.audit.pid_probe
+        calls = {"count": 0}
+
+        def flaky_probe(pid):
+            if pid != 3000:
+                return old_probe(pid)
+            calls["count"] += 1
+            return True if calls["count"] == 1 else None
+
+        self.audit.pid_probe = flaky_probe
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertEqual(calls["count"], 2)
+        self.assertEqual(self.rules(), [])
+        self.assertEqual(self.row()["status"], "PARTIAL")
+        self.assertIn("READ_FAILED", self.row()["reason_codes"])
+
     def test_threads_are_not_hidden_processes(self):
         self.exists.add(1203)                      # a thread born after the listing: Tgid != pid
         self.process(1203, tgid=1200)

@@ -232,7 +232,7 @@ def _parse_proc_stat(raw: bytes) -> tuple[int, int] | None:
         return None
 
 
-def _live_pid_probe(pid: int) -> bool:
+def _live_pid_probe(pid: int) -> bool | None:
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -240,7 +240,8 @@ def _live_pid_probe(pid: int) -> bool:
     except PermissionError:
         return True
     except OSError:
-        return False
+        # Unexpected errno is an unknown observation, never proof of PID absence.
+        return None
     return True
 
 
@@ -414,7 +415,7 @@ class Audit:
         self.hard_deadline_fired = False
         # Existence oracle for the PID sweep; replaced by fixtures. kill(pid, 0)
         # sends no signal: EPERM means "exists, not ours", ESRCH means absent.
-        self.pid_probe: Callable[[int], bool] = _live_pid_probe
+        self.pid_probe: Callable[[int], bool | None] = _live_pid_probe
         self.suspicious_exec_pids: set[int] = set()
         self.native_hosts_by_extension: dict[str, set[str]] = {}
         self._dpkg_index: dict[str, str] | None = None
@@ -2245,9 +2246,14 @@ class Audit:
                 gaps.add("BUDGET_EXHAUSTED")
                 break
             probed += 1
-            if pid in listed or pid in tids or not self.pid_probe(pid):
+            if pid in listed or pid in tids:
                 continue
-            candidates.append(pid)
+            probe = self.pid_probe(pid)
+            if probe is None:
+                gaps.add("READ_FAILED")
+                continue
+            if probe:
+                candidates.append(pid)
         hidden: list[dict[str, Any]] = []
         if len(candidates) > 200:
             # The bounded confirmation window cannot establish absence for
@@ -2264,7 +2270,13 @@ class Audit:
                 return
             listed_again, tids_again = repeated_listing
             for pid in candidates[:200]:
-                if pid in listed_again or pid in tids_again or not self.pid_probe(pid):
+                if pid in listed_again or pid in tids_again:
+                    continue
+                probe = self.pid_probe(pid)
+                if probe is None:
+                    gaps.add("READ_FAILED")
+                    continue
+                if not probe:
                     continue
                 tgid = self._tgid_of(pid)
                 if tgid is None:

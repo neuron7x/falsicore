@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -72,35 +72,28 @@ class BundleExactSizeBoundaryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Unsafe bundle member"):
                 bundle.read_verified_bundle(self.archive)
 
-    def test_exact_encoded_file_limit_is_accepted_on_stat_boundary(self):
+    def test_exact_encoded_file_limit_is_accepted_on_fstat_boundary(self):
         self.make_archive({"benign.dat": b"\x00" * 4096})
-        original_stat = Path.stat
+        original_fstat = bundle.os.fstat
+        # Bound the actual checked file descriptor, not an unused Path.stat.
+        # The 20 MiB threshold is an independent contract oracle.
+        def reported_size(fd):
+            info = original_fstat(fd)
+            return SimpleNamespace(st_mode=info.st_mode, st_size=20 * 1024 * 1024)
 
-        def reported_size(path, *args, **kwargs):
-            info = original_stat(path, *args, **kwargs)
-            if path == self.archive:
-                values = list(info)
-                values[6] = bundle.MAX_TOTAL
-                return os.stat_result(values)
-            return info
+        with patch.object(bundle.os, "fstat", reported_size):
+            self.assertEqual(bundle.read_verified_bundle(self.archive),
+                             {"benign.dat": b"\x00" * 4096})
 
-        # Inject only the metadata boundary; this does NOT emulate a real 20 MiB ZIP.
-        with patch.object(Path, "stat", reported_size):
-            self.assertEqual(bundle.read_verified_bundle(self.archive), {"benign.dat": b"\x00" * 4096})
-
-    def test_encoded_file_one_byte_above_limit_is_rejected_on_stat_boundary(self):
+    def test_encoded_file_one_byte_above_limit_is_rejected_on_fstat_boundary(self):
         self.make_archive({"benign.dat": b"\x00" * 4096})
-        original_stat = Path.stat
+        original_fstat = bundle.os.fstat
 
-        def reported_size(path, *args, **kwargs):
-            info = original_stat(path, *args, **kwargs)
-            if path == self.archive:
-                values = list(info)
-                values[6] = bundle.MAX_TOTAL + 1
-                return os.stat_result(values)
-            return info
+        def reported_size(fd):
+            info = original_fstat(fd)
+            return SimpleNamespace(st_mode=info.st_mode, st_size=20 * 1024 * 1024 + 1)
 
-        with patch.object(Path, "stat", reported_size):
+        with patch.object(bundle.os, "fstat", reported_size):
             with self.assertRaisesRegex(ValueError, "Application size limit exceeded"):
                 bundle.read_verified_bundle(self.archive)
 

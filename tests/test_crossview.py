@@ -158,14 +158,50 @@ class CrossViewFixture(unittest.TestCase):
         with patch.object(collectors, "PID_RECHECK_DELAY", 0):
             self.audit.crossview()
         [finding] = [f for f in self.audit.findings if f["rule"] == "HIDDEN_LISTENER"]
-        self.assertEqual(finding["evidence"], {"proto": "tcp", "port": 8080, "visible_in": "PROCFS_ONLY"})
+        self.assertEqual({k: finding["evidence"][k] for k in ("proto", "port", "visible_in")},
+                         {"proto": "tcp", "port": 8080, "visible_in": "PROCFS_ONLY"})
+        self.assertEqual(finding["evidence"]["family"], "ipv4")
+        self.assertRegex(finding["evidence"]["local_endpoint_id"], r"^[0-9a-f]{24}$")
 
-    def test_listener_in_ss_but_not_in_procfs_is_hidden(self):
+    def test_unconfirmed_netlink_only_socket_is_not_hidden(self):
+        candidate = 'udp UNCONN 0 0 0.0.0.0:4444 0.0.0.0:*\n'
+        calls = [candidate, ""]
+        self.audit.command = lambda *a, **kw: {
+            "status": "COMPLETED", "stdout": calls.pop(0), "stderr": "", "exit": 0,
+            "elapsed_ms": 1, "truncated": False, "error": ""}
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertNotIn("HIDDEN_LISTENER", self.rules())
+        self.assertEqual(self.audit.stats["crossview"]["listeners"]["unconfirmed_netlink_only"], 1)
+
+    def test_stable_netlink_only_requires_second_confirmation(self):
         self.ss_output = 'udp UNCONN 0 0 0.0.0.0:4444 0.0.0.0:*\n'
         with patch.object(collectors, "PID_RECHECK_DELAY", 0):
             self.audit.crossview()
         [finding] = [f for f in self.audit.findings if f["rule"] == "HIDDEN_LISTENER"]
-        self.assertEqual(finding["evidence"], {"proto": "udp", "port": 4444, "visible_in": "NETLINK_ONLY"})
+        self.assertEqual({k: finding["evidence"][k] for k in ("proto", "port", "visible_in")},
+                         {"proto": "udp", "port": 4444, "visible_in": "NETLINK_ONLY"})
+        self.assertEqual(finding["evidence"]["family"], "ipv4")
+        self.assertRegex(finding["evidence"]["local_endpoint_id"], r"^[0-9a-f]{24}$")
+
+    def test_partial_ss_never_proves_absent_listener(self):
+        self.write("/proc/net/tcp", "sl local_address rem_address st\n"
+                   "0: 0100007F:1F90 00000000:0000 0A 0 0 0\n")
+        self.audit.command = lambda *a, **kw: {"status": "PARTIAL", "stdout": "",
+            "stderr": "", "exit": 0, "elapsed_ms": 1, "truncated": True, "error": ""}
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertNotIn("HIDDEN_LISTENER", self.rules())
+        self.assertEqual(self.row()["status"], "PARTIAL")
+        self.assertIn("INPUT_TRUNCATED", self.row()["reason_codes"])
+
+    def test_hidepid_is_scope_limit_not_hidden_process(self):
+        self.write("/proc/self/mountinfo", "22 1 0:21 / /proc rw,hidepid=2 - proc proc rw\n")
+        self.exists.add(3500)
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertNotIn("HIDDEN_PROCESS", self.rules())
+        self.assertIn("OTHER_ACCOUNTS_NOT_VISIBLE", self.row()["scope_limits"])
 
     def test_matching_listeners_are_silent(self):
         self.write("/proc/net/tcp6", "  sl  local_address rem_address st\n"
@@ -226,6 +262,128 @@ class CrossViewFixture(unittest.TestCase):
         with patch.object(collectors, "PID_RECHECK_DELAY", 0), patch.object(collectors, "PID_SWEEP_MAX", 5000):
             self.audit.crossview()
         self.assertEqual(self.audit.stats["crossview"]["processes"]["pid_max_probed"], 5000)
+
+
+    def test_same_port_on_distinct_ipv4_bind_addresses_remains_distinct(self):
+        self.write("/proc/net/tcp", "sl local_address rem_address st\n"
+                   "0: 0100007F:1F90 00000000:0000 0A 0 0 0\n")
+        self.ss_output = "tcp LISTEN 0 128 127.0.0.2:8080 0.0.0.0:*\n"
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        found = [f["evidence"] for f in self.audit.findings if f["rule"] == "HIDDEN_LISTENER"]
+        self.assertEqual(len(found), 2)
+        self.assertEqual({x["visible_in"] for x in found}, {"PROCFS_ONLY", "NETLINK_ONLY"})
+        self.assertEqual({x["family"] for x in found}, {"ipv4"})
+        self.assertEqual(len({x["local_endpoint_id"] for x in found}), 2)
+        self.assertNotIn("127.0.0.", str(found))
+
+    def test_ipv4_and_ipv6_wildcards_same_port_are_not_one_identity(self):
+        self.write("/proc/net/tcp", "sl local_address rem_address st\n"
+                   "0: 00000000:0016 00000000:0000 0A 0 0 0\n")
+        self.ss_output = "tcp LISTEN 0 128 [::]:22 [::]:*\n"
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        found = [f["evidence"] for f in self.audit.findings if f["rule"] == "HIDDEN_LISTENER"]
+        self.assertEqual(len(found), 2)
+        self.assertEqual({x["family"] for x in found}, {"ipv4", "ipv6"})
+
+    def test_ambiguous_ss_wildcard_fails_closed_without_absence_claim(self):
+        self.write("/proc/net/tcp", "sl local_address rem_address st\n"
+                   "0: 0100007F:1F90 00000000:0000 0A 0 0 0\n")
+        self.ss_output = "tcp LISTEN 0 128 *:8080 *:*\n"
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertNotIn("HIDDEN_LISTENER", self.rules())
+        self.assertEqual(self.row()["status"], "PARTIAL")
+        self.assertIn("PARSE_UNSUPPORTED", self.row()["reason_codes"])
+
+    def test_missing_one_procnet_family_blocks_negative_inference(self):
+        (self.proc / "net/udp6").unlink()
+        self.ss_output = "tcp LISTEN 0 128 127.0.0.1:8080 0.0.0.0:*\n"
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertNotIn("HIDDEN_LISTENER", self.rules())
+        self.assertIn("READ_FAILED", self.row()["reason_codes"])
+
+    def test_partial_first_ss_without_truncation_flag_is_not_complete(self):
+        self.write("/proc/net/tcp", "sl local_address rem_address st\n"
+                   "0: 0100007F:1F90 00000000:0000 0A 0 0 0\n")
+        self.audit.command = lambda *args, **kw: {
+            "status": "PARTIAL", "stdout": "", "stderr": "", "exit": 0,
+            "elapsed_ms": 1, "truncated": False, "error": ""}
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertNotIn("HIDDEN_LISTENER", self.rules())
+        self.assertIn("INPUT_TRUNCATED", self.row()["reason_codes"])
+
+    def test_complete_but_truncated_second_ss_cannot_confirm_hidden_listener(self):
+        candidate = "udp UNCONN 0 0 0.0.0.0:4444 0.0.0.0:*\n"
+        replies = [
+            {"status": "COMPLETED", "stdout": candidate, "stderr": "", "exit": 0,
+             "elapsed_ms": 1, "truncated": False, "error": ""},
+            {"status": "COMPLETED", "stdout": candidate, "stderr": "", "exit": 0,
+             "elapsed_ms": 1, "truncated": True, "error": ""},
+        ]
+        self.audit.command = lambda *args, **kw: replies.pop(0)
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertNotIn("HIDDEN_LISTENER", self.rules())
+        self.assertIn("INPUT_TRUNCATED", self.row()["reason_codes"])
+
+    def test_partial_second_ss_cannot_confirm_hidden_listener(self):
+        candidate = "udp UNCONN 0 0 0.0.0.0:4444 0.0.0.0:*\n"
+        replies = [
+            {"status": "COMPLETED", "stdout": candidate, "stderr": "", "exit": 0,
+             "elapsed_ms": 1, "truncated": False, "error": ""},
+            {"status": "PARTIAL", "stdout": candidate, "stderr": "", "exit": 0,
+             "elapsed_ms": 1, "truncated": False, "error": ""},
+        ]
+        self.audit.command = lambda *args, **kw: replies.pop(0)
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertNotIn("HIDDEN_LISTENER", self.rules())
+        self.assertIn("INPUT_TRUNCATED", self.row()["reason_codes"])
+
+    def test_established_connection_is_not_a_listening_socket(self):
+        self.ss_output = "tcp ESTAB 0 0 127.0.0.1:8080 127.0.0.2:55000\n"
+        with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+            self.audit.crossview()
+        self.assertNotIn("HIDDEN_LISTENER", self.rules())
+
+
+    def test_two_field_non_listener_is_ignored_not_dropped_as_truncated(self):
+        # FC-13/FC-23: exactly two fields can describe an irrelevant state.
+        # Rejecting it as a malformed listener masks other valid observations.
+        self.assertEqual(collectors._ss_listener_endpoints("tcp ESTAB\n"), set())
+        self.assertIsNone(collectors._ss_listener_endpoints("tcp\n"))
+
+    def test_mountinfo_skips_other_mounts_and_checks_proc_superblock(self):
+        # The first line is an unrelated mount: continue must not become break.
+        two_mounts = (b"21 1 0:20 / /run rw - tmpfs tmpfs rw\n"
+                      b"22 1 0:21 / /proc rw - proc proc rw,hidepid=2\n")
+        self.assertIs(collectors._proc_mount_has_hidepid(two_mounts), True)
+        self.assertIs(collectors._proc_mount_has_hidepid(
+            b"22 1 0:21 / /proc rw - proc proc rw\n"), False)
+        # A truncated procfs superblock has an UNKNOWN policy, not proof of
+        # unrestricted visibility for negative-inference PID sweeps.
+        self.assertIsNone(collectors._proc_mount_has_hidepid(
+            b"22 1 0:21 / /proc rw - proc proc\n"))
+        self.assertIsNone(collectors._proc_mount_has_hidepid(
+            b"21 1 0:20 / /run rw - tmpfs tmpfs rw\n"))
+
+    def test_candidate_confirmation_cap_has_an_exact_boundary(self):
+        # FC-23: 200 candidates fit; 201 requires one explicitly unexamined
+        # candidate. All PID probes here are hermetic, not real host checks.
+        for count in (200, 201):
+            with self.subTest(count=count):
+                self.audit.pid_probe = lambda pid, end=200 + count: 200 <= pid < end
+                gaps, stats = collectors.Gaps(), {}
+                with patch.object(collectors, "PID_RECHECK_DELAY", 0):
+                    self.audit._hidden_processes(gaps, stats)
+                self.assertEqual(stats["processes"]["candidates"], count)
+                self.assertEqual(stats["processes"]["pid_max_probed"], 4096)
+                self.assertEqual(dict(gaps.incomplete).get("ENUMERATION_LIMIT", 0),
+                                 count - 200)
 
 
 class LiveCrossView(unittest.TestCase):

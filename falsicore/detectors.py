@@ -287,20 +287,24 @@ def endpoint_class(endpoint: str) -> str:
     return "other"
 
 
-def parse_ss(text: str) -> list[dict]:
-    """ss -H -tuna[p] output. No remote IP addresses are returned."""
+def parse_ss(text: str, *, parse_issues: dict[str, int] | None = None) -> list[dict]:
+    """Parse ss -H -tuna[p]; count unparseable known-protocol rows without exporting raw endpoints."""
     out = []
     for line in text.splitlines():
         bits = line.split()
-        if len(bits) < 5:
+        if not bits or bits[0] not in ("tcp", "udp", "tcp6", "udp6"):
+            continue
+        if len(bits) < 6:
+            if parse_issues is not None:
+                parse_issues["malformed_rows"] = parse_issues.get("malformed_rows", 0) + 1
             continue
         proto, state = bits[0], bits[1]
-        local, remote = bits[4], bits[5] if len(bits) > 5 else ""
-        if proto not in ("tcp", "udp", "tcp6", "udp6"):
-            continue
+        local, remote = bits[4], bits[5]
         port = local.rsplit(":", 1)[-1]   # no mutate: the last element is the same for any maxsplit >= 1
-        if not port.isdigit():
+        if ":" not in local or not port.isdigit():
             port = "?"
+            if parse_issues is not None:
+                parse_issues["malformed_rows"] = parse_issues.get("malformed_rows", 0) + 1
         out.append({
             "proto": proto, "state": state, "local_class": endpoint_class(local),
             "local_port": port, "remote_class": endpoint_class(remote),
@@ -344,8 +348,10 @@ def interpret_verdict(findings: list[dict], coverage: list[dict]) -> str:
     # On an offline image the live-only checks are declared, not missing: the
     # verdict then speaks about the disk, and the coverage rows say so.
     offline = {x.get("check") for x in coverage
-               if "LIVE_ONLY_NOT_IN_OFFLINE_IMAGE" in (x.get("reason_codes") or {}) or
-               "LIVE_ONLY_NOT_IN_OFFLINE_IMAGE" in (x.get("scope_limits") or {})}
+               if x.get("status") == "SKIPPED" and x.get("check") in
+               {"processes", "network", "crossview"} and (
+                   "LIVE_ONLY_NOT_IN_OFFLINE_IMAGE" in (x.get("reason_codes") or {}) or
+                   "LIVE_ONLY_NOT_IN_OFFLINE_IMAGE" in (x.get("scope_limits") or {}))}
     essential -= offline
     incomplete = [x for x in coverage if x.get("check") in essential and x.get("status") != "COMPLETED"]
     observed = {x.get("check") for x in coverage}

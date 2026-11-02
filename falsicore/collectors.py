@@ -6,6 +6,8 @@ import copy
 import datetime as dt
 import gzip
 import hashlib
+import hmac
+import ipaddress
 import io
 import json
 import os
@@ -103,9 +105,12 @@ SCOPE_LIMIT_CODES = {
 RELAY_PROGRAMS = frozenset({
     "cat", "echo", "printf", "head", "tail", "sed", "awk", "gawk", "mawk", "tr", "cut", "tee", "xargs", "env",
     "sh", "bash", "dash", "zsh", "python", "python3", "perl", "ruby", "node", "base64", "xxd", "od", "rev",
-    "sort", "uniq", "grep", "egrep", "fgrep", "find", "curl", "wget", "nc", "ncat", "socat", "ssh", "sudo", "doas",
+    "sort", "uniq", "grep", "egrep", "fgrep", "find", "curl", "wget", "nc", "ncat", "socat", "ssh", "sudo", "doas", "dd",
     "zcat", "gunzip", "bzcat", "xzcat", "openssl", "gpg", "eval", "exec", "command", "source", ".",
 })
+# Explicit, narrow trust exceptions for transparent package-managed generators.
+# Attestation remains an assumption about emitted content, not its verification.
+ATTESTABLE_GENERATORS = frozenset({"dircolors", "lesspipe"})
 PROGRAM_DIRS = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 LIVE_ONLY_COLLECTORS = ("processes", "network", "kernel", "crossview")
 # Probes that may run against an offline image: journalctl reading the image's own journal directory.
@@ -143,6 +148,8 @@ VERIFY_PREFIXES = ("/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/", "/usr/libexec/"
 VERIFY_MAX_FILES = 20000
 VERIFY_MAX_BYTES = 512 * 1024 * 1024
 VERIFY_MAX_FILE_BYTES = 8 * 1024 * 1024   # safe_read's own ceiling; larger files count as unverifiable
+DPKG_DB_MAX_RECORDS = 20000
+DPKG_DB_MAX_BYTES = 128 * 1024 * 1024
 PACKAGE_DB_MAX_RECORDS = 20000
 PACKAGE_DB_MAX_BYTES = 128 * 1024 * 1024
 MTREE_MAX_COMPRESSED = 8 * 1024 * 1024
@@ -246,6 +253,111 @@ def _hex_endpoint_port(field: str) -> int | None:
         return None
 
 
+def _proc_listener_endpoint(table: str, field: str) -> tuple[str, str, int] | None:
+    """Decode Linux /proc/net local_address, including IPv6 32-bit LE words.
+
+    No raw local address is ever emitted into a persisted finding.
+    """
+    addr, sep, port = field.partition(":")
+    # bytes.fromhex plus ipaddress validate both hex syntax and exact
+    # address width. Repeating these checks here did not strengthen safety.
+    if not sep:
+        return None
+    if not re.fullmatch(r"[0-9A-Fa-f]{4}", port):
+        return None
+    try:
+        raw = bytes.fromhex(addr)
+        if table.endswith("6"):
+            # Linux prints each 32-bit IPv6 word in little-endian order.
+            ordered = b"".join(raw[i:i + 4][::-1] for i in range(0, len(raw), 4))
+            host = str(ipaddress.IPv6Address(ordered))
+            family = "6"
+        else:
+            host = str(ipaddress.IPv4Address(raw[::-1]))
+            family = "4"
+    except ValueError:
+        return None
+    return (table.rstrip("6") + family, host, int(port, 16))
+
+
+def _ss_listener_endpoints(output: str) -> set[tuple[str, str, int]] | None:
+    """Keep exact local address/family/port; reject an ambiguous ss table.
+
+    An asterisk hostname, scope-qualified IPv6 address or malformed address
+    cannot prove absence in the other view. Do not reduce it to (proto, port).
+    """
+    result: set[tuple[str, str, int]] = set()
+    for row in output.splitlines():
+        fields = row.split()
+        if not fields:
+            continue
+        if fields[0] not in ("tcp", "udp", "tcp6", "udp6"):
+            continue
+        # A truncated known-protocol row is not proof of socket absence.
+        if len(fields) < 2:
+            return None
+        if fields[1] not in ("LISTEN", "UNCONN"):
+            continue
+        if len(fields) < 5:
+            return None
+        addr, sep, port_text = fields[4].rpartition(":")
+        if not sep or not re.fullmatch(r"[0-9]{1,5}", port_text):
+            return None
+        if addr.startswith("[") and addr.endswith("]"):
+            addr = addr[1:-1]
+        if not addr or "%" in addr:
+            return None
+        try:
+            host = ipaddress.ip_address(addr)
+        except ValueError:
+            return None
+        family = "6" if host.version == 6 else "4"
+        if fields[0].endswith("6") and family != "6":
+            return None
+        port = int(port_text)
+        if port > 65535:
+            return None
+        result.add((fields[0].rstrip("6") + family, str(host), port))
+    return result
+
+def _proc_mount_has_hidepid(raw: bytes) -> bool | None:
+    """Return True (restricted), False (verified unrestricted), or None (unknown).
+
+    The kernel's mountinfo format requires mount options, the '-' separator,
+    filesystem type and superblock options. An absent/malformed procfs record
+    cannot prove a user has unrestricted process-list visibility.
+    """
+    if not raw or b"\x00" in raw:
+        return None
+    seen_proc = False
+    for line in raw.decode("utf-8", "replace").splitlines():
+        fields = line.split()
+        if not fields:
+            continue
+        if len(fields) < 5:
+            return None
+        if fields[4] != "/proc":
+            continue
+        seen_proc = True
+        if "-" not in fields:
+            return None
+        dash = fields.index("-")
+        # dash >= 6 and len == dash + 4 establish the 10-field minimum.
+        # Duplicating that bound above makes an unobservable mutant.
+        if dash < 6 or len(fields) != dash + 4 or fields[dash + 1] != "proc":
+            return None
+        options = fields[5].split(",") + fields[dash + 3].split(",")
+        for option in options:
+            if not option.startswith("hidepid="):
+                continue
+            mode = option.partition("=")[2]
+            if mode in ("1", "2", "4", "invisible", "ptraceable"):
+                return True
+            if mode != "0":
+                return None
+    return False if seen_proc else None
+
+
 class Audit:
     def __init__(self, scope: str, target_user: str | None = None, incident_at: str | None = None,
                  profile: str = "standard", max_seconds: int | None = None, root: Path | str = "/",
@@ -308,6 +420,7 @@ class Audit:
         self._dpkg_index: dict[str, str] | None = None
         self._pacman_index: dict[str, tuple[str, str]] | None = None
         self._apk_index: dict[str, tuple[str, str]] | None = None
+        self._package_db_gaps: dict[str, Counter[str]] = {}
         boot, _ = safe_read(self.proc_root / "sys/kernel/random/boot_id", 64)
         self.boot_id = boot.decode("ascii", "replace").strip() if boot else "UNAVAILABLE"
         self.incident_at = None
@@ -828,7 +941,10 @@ class Audit:
             self.checked("network", "UNAVAILABLE" if r["status"] == "UNAVAILABLE" else "FAILED",
                          "ss unavailable or failed; no active network scan", gaps=gaps)
             return
-        sockets = d.parse_ss(r["stdout"])
+        parse_issues: dict[str, int] = {}
+        sockets = d.parse_ss(r["stdout"], parse_issues=parse_issues)
+        if parse_issues.get("malformed_rows", 0):
+            gaps.add("MALFORMED_INPUT", parse_issues["malformed_rows"])
         self.listening_ports: dict[str, set[str]] = {}
         for sock in sockets:
             if sock["state"] == "LISTEN":
@@ -858,6 +974,7 @@ class Audit:
                     self.private_index["net_" + d.digest(remote)] = remote
         self.baseline["listeners"] = sorted(observed)
         self.stats["network"] = {"socket_count": len(sockets), "states": dict(counts),
+                                 "malformed_rows": parse_issues.get("malformed_rows", 0),
                                  "listeners": exposed[:150], "listeners_truncated": max(0, len(exposed)-150),
                                  "process_attribution_available": sum(s["has_process_info"] for s in sockets)}
         missing_owner = sum(s["state"] == "LISTEN" and not s["has_process_info"] for s in sockets)
@@ -874,7 +991,10 @@ class Audit:
         Runs after all collectors so a rolled-back network collector cannot leave
         a half-applied correlation; without a network observation it says UNKNOWN.
         """
-        network_ok = any(c["check"] == "network" and c["status"] in ("COMPLETED", "PARTIAL") for c in self.coverage)
+        network_rows = [c for c in self.coverage if c["check"] == "network"]
+        network_state = network_rows[-1]["status"] if network_rows else None
+        network_ok = network_state in ("COMPLETED", "PARTIAL")
+        network_complete = network_state == "COMPLETED"
         listeners = getattr(self, "listening_ports", {}) if network_ok else None
         for f in self.findings:
             ev = f.get("evidence", {})
@@ -883,7 +1003,8 @@ class Audit:
             if listeners is None or ev["debug_port"] == "INVALID":
                 ev["debug_port_listener"] = "UNKNOWN"
             elif ev["debug_port"] not in listeners:
-                ev["debug_port_listener"] = "NOT_OBSERVED"
+                # Partial ss output can establish a seen listener, never its absence.
+                ev["debug_port_listener"] = "NOT_OBSERVED" if network_complete else "UNKNOWN"
             elif listeners[ev["debug_port"]] <= {"loopback"}:
                 ev["debug_port_listener"] = "LISTENING_LOOPBACK_ONLY"
             else:
@@ -1011,6 +1132,13 @@ class Audit:
                 gaps.add("READ_FAILED")
         return out, incomplete
 
+    def _package_db_gap(self, manager: str, reason: str, omitted: int = 1) -> None:
+        if reason not in INCOMPLETE_CODES:
+            raise ValueError("Package database failure must be an incompleteness code")
+        if not hasattr(self, "_package_db_gaps"):
+            self._package_db_gaps = {}
+        self._package_db_gaps.setdefault(manager, Counter())[reason] += omitted
+
     def _dpkg_md5(self, path: Path) -> str | None:
         """md5 recorded by dpkg for an installed file, from a lazily built index."""
         if self._dpkg_index is None:
@@ -1019,20 +1147,29 @@ class Audit:
             try:
                 lists = sorted(self.sys("/var/lib/dpkg/info").glob("*.md5sums"))
             except OSError:
+                self._package_db_gap("dpkg", "READ_FAILED")
                 lists = []
-            for md5file in lists[:20000]:
-                raw, _ = safe_read(md5file, 4 * 1024 * 1024)
+            if len(lists) > DPKG_DB_MAX_RECORDS:
+                self._package_db_gap("dpkg", "ENUMERATION_LIMIT", len(lists) - DPKG_DB_MAX_RECORDS)
+            for offset, md5file in enumerate(lists[:DPKG_DB_MAX_RECORDS]):
+                raw, read_status = safe_read(md5file, 4 * 1024 * 1024)
                 if raw is None:
+                    self._package_db_gap("dpkg", "INPUT_TRUNCATED" if read_status == "TOO_LARGE" else "READ_FAILED")
                     continue
                 total += len(raw)
-                if total > 128 * 1024 * 1024:
+                if total > DPKG_DB_MAX_BYTES:
+                    self._package_db_gap("dpkg", "ENUMERATION_LIMIT", len(lists) - offset)
                     break
                 for line in raw.decode("utf-8", "replace").splitlines():
                     digest, _, rel = line.partition("  ")
-                    if len(digest) == 32 and rel:
+                    if len(digest) == 32 and re.fullmatch(r"[0-9a-fA-F]{32}", digest) and rel:
                         index["/" + rel] = digest
+                    elif line.strip():
+                        self._package_db_gap("dpkg", "MALFORMED_INPUT")
             # Conffiles (/etc/...) are not in *.md5sums; dpkg records them in status.
-            raw, _ = safe_read(self.sys("/var/lib/dpkg/status"), 8 * 1024 * 1024)
+            raw, read_status = safe_read(self.sys("/var/lib/dpkg/status"), 8 * 1024 * 1024)
+            if raw is None:
+                self._package_db_gap("dpkg", "INPUT_TRUNCATED" if read_status == "TOO_LARGE" else "READ_FAILED")
             if raw is not None:
                 for m in re.finditer(r"^ (/\S+) ([0-9a-f]{32})(?: obsolete)?$", raw.decode("utf-8", "replace"), re.M):
                     index.setdefault(m.group(1), m.group(2))
@@ -1059,16 +1196,23 @@ class Audit:
             try:
                 folders = sorted(p for p in local.iterdir() if p.is_dir() and not p.is_symlink())
             except OSError:
+                self._package_db_gap("pacman", "READ_FAILED")
                 folders = []
             total = 0
-            for folder in folders[:PACKAGE_DB_MAX_RECORDS]:
+            if len(folders) > PACKAGE_DB_MAX_RECORDS:
+                self._package_db_gap("pacman", "ENUMERATION_LIMIT", len(folders) - PACKAGE_DB_MAX_RECORDS)
+            for offset, folder in enumerate(folders[:PACKAGE_DB_MAX_RECORDS]):
                 data = self._read_mtree(folder / "mtree")
                 if data is None:
+                    self._package_db_gap("pacman", "PARSE_UNSUPPORTED")
                     continue
                 total += len(data)
                 if total > PACKAGE_DB_MAX_BYTES:
+                    self._package_db_gap("pacman", "ENUMERATION_LIMIT", len(folders) - offset)
                     break
-                entries, _ = pk.parse_pacman_mtree(data)
+                entries, parsed = pk.parse_pacman_mtree(data)
+                if parsed.get("malformed", 0):
+                    self._package_db_gap("pacman", "MALFORMED_INPUT", parsed["malformed"])
                 for rel, attrs in entries.items():
                     if attrs.get("type") == "file" and rel not in pk.PACMAN_METADATA_ENTRIES:
                         if "sha256" in attrs:
@@ -1149,8 +1293,15 @@ class Audit:
         $PATH, never /usr/local); relay programs (cat, sed, sh, …) never qualify,
         because their output is their input.
         """
-        base = PurePosixPath(name).name
-        if not base or base in RELAY_PROGRAMS or base in {"[", "test", "true", "false"}:
+        # Never alias ./prog, ../prog, or path/prog to /usr/bin/prog.
+        # A relative path is an execution target, not a PATH lookup name.
+        if not name or ("/" in name and not name.startswith("/")):
+            return None
+        canonical = PurePosixPath(name)
+        if name.startswith("/") and (str(canonical) != name or str(canonical.parent) not in PROGRAM_DIRS):
+            return None
+        base = canonical.name
+        if not base or base not in ATTESTABLE_GENERATORS or base in RELAY_PROGRAMS:
             return None
         candidates = [self.sys(name)] if name.startswith("/") else [self.sys(d) / base for d in PROGRAM_DIRS]
         for path in candidates:
@@ -1177,8 +1328,9 @@ class Audit:
         if isinstance(path, Path) and content is not None and self.package_attested(path, content):
             gaps.add("PACKAGE_ATTESTED_NOT_PARSED")
             return
-        programs = analysis.get("evaluated_programs", [])
+        programs = analysis.get("qualified_eval_sites", [])
         if (limitations == ["EXPANSION_NOT_RESOLVED"] and programs
+                and analysis.get("unresolved_non_eval_sites") == 0
                 and analysis.get("unresolved_expansions") == len(programs)
                 and all(self._attested_program(p) is not None for p in programs)):
             gaps.add("EVAL_OF_ATTESTED_PROGRAM_OUTPUT")
@@ -1199,7 +1351,11 @@ class Audit:
         """Resolve a literal source/. operand: ~/, $HOME/ and ${HOME}/ forms only."""
         for prefix in ("~/", "\x00VAR:HOME\x00/"):
             if target.startswith(prefix):
-                return self.home / target[len(prefix):]
+                suffix = target[len(prefix):].lstrip("/")
+                components = PurePosixPath(suffix).parts
+                if not components or any(part in (".", "..") for part in components):
+                    return None
+                return self.home.joinpath(*components)
         if "\x00" in target or not target.startswith("/"):
             return None
         # An absolute operand names a file of the inspected system: resolve it
@@ -1853,7 +2009,13 @@ class Audit:
         prefix: list[str] = []
         if self.offline:
             journal_dir = self.sys("/var/log/journal")
-            if not journal_dir.is_dir() or journal_dir.is_symlink():
+            # journalctl resolves its own pathname. Reject symlinks in every
+            # ancestor rather than checking only the final directory.
+            # The image must additionally be mounted read-only to eliminate
+            # path-swap races between this preflight and journalctl.
+            if (not journal_dir.is_dir() or
+                    any(part.is_symlink() for part in (journal_dir, *journal_dir.parents)
+                        if part != part.parent)):
                 return {"status": "UNAVAILABLE", "stdout": "", "stderr": "", "exit": None, "elapsed_ms": 0,
                         "truncated": False, "error": "no journal directory in image", "residual_killed": False}
             prefix = [f"--directory={journal_dir.absolute().as_posix()}"]
@@ -1992,13 +2154,15 @@ class Audit:
             return self.proc_root / str(os.getpid())
         return own
 
-    def _listed_pids_and_tids(self) -> tuple[set[int], set[int]]:
+    def _listed_pids_and_tids(self) -> tuple[set[int], set[int]] | None:
         listed: set[int] = set()
         tids: set[int] = set()
         try:
             names = [e.name for e in self.proc_root.iterdir() if e.name.isdigit()]
         except OSError:
-            return listed, tids
+            # An unreadable proc directory must not masquerade as an empty
+            # directory; cross-view negatives depend on a complete listing.
+            return None
         for name in names:
             listed.add(int(name))
             try:
@@ -2018,12 +2182,62 @@ class Audit:
         return int(m.group(1)) if m else "UNREADABLE"
 
     def _hidden_processes(self, gaps: Gaps, stats: dict[str, Any]) -> None:
-        listed, tids = self._listed_pids_and_tids()
-        raw, _ = safe_read(self.proc_root / "sys/kernel/pid_max", 64)
+        # hidepid is a documented access restriction, not evidence of
+        # malicious kernel filtering. Do not promote EPERM to a rootkit alarm.
+        if self.scope == "user":
+            mountinfo = self._proc_self() / "mountinfo"
+            mounts, status = safe_read(mountinfo, 4 * 1024 * 1024)
+            if mounts is None:
+                # Without mount visibility, EPERM from kill(pid, 0) is not
+                # evidence of a hidden process. Refuse negative inference when
+                # procfs access policy is unknown or the input is truncated.
+                self.read_gap(mountinfo, status, gaps)
+                if status == "ABSENT":
+                    gaps.add("READ_FAILED")
+                stats["processes"] = {"status": "MOUNT_VISIBILITY_UNAVAILABLE",
+                                      "hidden": 0, "pid_max_probed": 0}
+                return
+            mount_policy = _proc_mount_has_hidepid(mounts)
+            if mount_policy is None:
+                gaps.add("PARSE_UNSUPPORTED")
+                stats["processes"] = {"status": "PROC_MOUNT_POLICY_UNDETERMINED",
+                                      "hidden": 0, "pid_max_probed": 0}
+                return
+            if mount_policy:
+                gaps.add("OTHER_ACCOUNTS_NOT_VISIBLE")
+                stats["processes"] = {"status": "HIDEPID_RESTRICTED", "hidden": 0, "pid_max_probed": 0}
+                return
+        initial_listing = self._listed_pids_and_tids()
+        if initial_listing is None:
+            gaps.add("READ_FAILED")
+            stats["processes"] = {"status": "PROC_ENUMERATION_UNAVAILABLE",
+                                  "hidden": 0, "pid_max_probed": 0}
+            return
+        listed, tids = initial_listing
+        pid_max_path = self.proc_root / "sys/kernel/pid_max"
+        raw, status = safe_read(pid_max_path, 64)
+        if raw is None:
+            # An unknown PID upper bound cannot certify a complete sweep.
+            # An absent or unreadable bound is incomplete even when the
+            # read error is otherwise reported as a scope limitation.
+            self.read_gap(pid_max_path, status, gaps)
+            gaps.add("READ_FAILED")
+            stats["processes"] = {"status": "PID_MAX_UNAVAILABLE",
+                                  "hidden": 0, "pid_max_probed": 0}
+            return
         try:
-            pid_max = min(int(raw.decode("ascii", "replace").strip()), PID_SWEEP_MAX) if raw else 32768
-        except ValueError:
-            pid_max = 32768
+            pid_max = int(raw.decode("ascii").strip())
+        except (UnicodeDecodeError, ValueError):
+            pid_max = 0
+        if pid_max < 1:
+            gaps.add("MALFORMED_INPUT")
+            stats["processes"] = {"status": "PID_MAX_INVALID",
+                                  "hidden": 0, "pid_max_probed": 0}
+            return
+        if pid_max > PID_SWEEP_MAX:
+            # The unprobed tail remains a declared coverage gap.
+            gaps.add("ENUMERATION_LIMIT", pid_max - PID_SWEEP_MAX)
+            pid_max = PID_SWEEP_MAX
         probed = 0
         candidates: list[int] = []
         for pid in range(1, pid_max + 1):
@@ -2035,9 +2249,20 @@ class Audit:
                 continue
             candidates.append(pid)
         hidden: list[dict[str, Any]] = []
+        if len(candidates) > 200:
+            # The bounded confirmation window cannot establish absence for
+            # unexamined candidates; a partial verdict is mandatory.
+            gaps.add("ENUMERATION_LIMIT", len(candidates) - 200)
         if candidates:
             time.sleep(PID_RECHECK_DELAY)   # let a process born mid-sweep settle, then confirm
-            listed_again, tids_again = self._listed_pids_and_tids()
+            repeated_listing = self._listed_pids_and_tids()
+            if repeated_listing is None:
+                gaps.add("READ_FAILED")
+                stats["processes"] = {"status": "PROC_RECHECK_UNAVAILABLE",
+                                      "pid_max_probed": probed,
+                                      "candidates": len(candidates), "hidden": 0}
+                return
+            listed_again, tids_again = repeated_listing
             for pid in candidates[:200]:
                 if pid in listed_again or pid in tids_again or not self.pid_probe(pid):
                     continue
@@ -2088,25 +2313,39 @@ class Audit:
                          observed={"module_ref": self.source(name), "observed_utc": utc_now()})
         stats["modules"] = {"proc_modules": len(in_proc), "sysfs_live": len(loaded_in_sys), "hidden": len(hidden)}
 
-    def _procnet_listeners(self) -> set[tuple[str, int]] | None:
-        found: set[tuple[str, int]] = set()
-        any_read = False
+    def _procnet_listeners(self) -> set[tuple[str, str, int]] | None:
+        found: set[tuple[str, str, int]] = set()
         net = self._proc_self() / "net"
         if not net.is_dir():
             net = self.proc_root / "net"          # fixture without a per-process net directory
         for name, listen_state in (("tcp", "0A"), ("tcp6", "0A"), ("udp", "07"), ("udp6", "07")):
             raw, _ = safe_read(net / name, 8 * 1024 * 1024)
+            # Any missing family table invalidates a negative cross-view claim.
             if raw is None:
-                continue
-            any_read = True
+                return None
             for line in raw.decode("ascii", "replace").splitlines()[1:]:
                 fields = line.split()
-                if len(fields) < 4 or fields[3] != listen_state:
+                if len(fields) < 4:
+                    return None
+                if fields[3] != listen_state:
                     continue
-                port = _hex_endpoint_port(fields[1])
-                if port is not None:
-                    found.add((name.rstrip("6"), port))
-        return found if any_read else None
+                endpoint = _proc_listener_endpoint(name, fields[1])
+                if endpoint is None:
+                    return None
+                found.add(endpoint)
+        return found
+
+    def _listener_evidence(self, endpoint: tuple[str, str, int], view: str) -> dict:
+        """Emit per-scan keyed pseudonym, never plaintext socket bind addresses."""
+        secret = getattr(self, "_listener_hash_key", None)
+        if secret is None:
+            secret = os.urandom(32)
+            self._listener_hash_key = secret
+        proto_family, address, port = endpoint
+        identity = hmac.new(secret, "\0".join((proto_family, address, str(port))).encode("ascii"),
+                            hashlib.sha256).hexdigest()[:24]
+        return {"proto": proto_family[:-1], "family": "ipv6" if proto_family.endswith("6") else "ipv4",
+                "port": port, "local_endpoint_id": identity, "visible_in": view}
 
     def _hidden_listeners(self, gaps: Gaps, stats: dict[str, Any]) -> None:
         before = self._procnet_listeners()
@@ -2114,29 +2353,56 @@ class Audit:
             gaps.add("READ_FAILED")
             return
         r = self.command("ss", ["-H", "-tuna", "-p"], timeout=15)
-        if r["status"] not in ("COMPLETED", "PARTIAL"):
+        if r["status"] != "COMPLETED" or r.get("truncated"):
+            # Negative inference needs a complete socket table.
             self.command_gap(r, gaps)
+            if r["status"] == "PARTIAL" or r.get("truncated"):
+                gaps.add("INPUT_TRUNCATED")
             return
-        netlink: set[tuple[str, int]] = set()
-        for sock in d.parse_ss(r["stdout"]):
-            if sock["state"] in ("LISTEN", "UNCONN") and sock["local_port"].isdigit():
-                netlink.add((sock["proto"].rstrip("6"), int(sock["local_port"])))
-        after = self._procnet_listeners() or set()
-        stable = before & after                      # present across the ss call: not a race
+        netlink = _ss_listener_endpoints(r["stdout"])
+        if netlink is None:
+            gaps.add("PARSE_UNSUPPORTED")
+            return
+        after = self._procnet_listeners()
+        if after is None:
+            gaps.add("READ_FAILED")
+            return
+        stable = before & after
         procfs_only = sorted(stable - netlink)
-        netlink_only = sorted(netlink - before - after)
-        for proto, port in procfs_only[:50]:
+        # A new ss-only endpoint must persist in a second complete observation.
+        suspects = netlink - before - after
+        confirmed: set[tuple[str, str, int]] = set()
+        if suspects:
+            again = self.command("ss", ["-H", "-tuna", "-p"], timeout=15)
+            if again["status"] == "COMPLETED" and not again.get("truncated"):
+                next_netlink = _ss_listener_endpoints(again["stdout"])
+                if next_netlink is None:
+                    gaps.add("PARSE_UNSUPPORTED")
+                else:
+                    after_again = self._procnet_listeners()
+                    if after_again is None:
+                        gaps.add("READ_FAILED")
+                    else:
+                        confirmed = (suspects & next_netlink) - after_again
+            else:
+                self.command_gap(again, gaps)
+                if again["status"] == "PARTIAL" or again.get("truncated"):
+                    gaps.add("INPUT_TRUNCATED")
+        netlink_only = sorted(confirmed)
+        for endpoint in procfs_only[:50]:
             self.finding("HIDDEN_LISTENER", "high",
                          "A listening socket appears in /proc/net but not in the netlink socket table (ss); "
                          "one of the two views is being filtered", "crossview://listeners",
-                         {"proto": proto, "port": port, "visible_in": "PROCFS_ONLY"}, attack="T1014")
-        for proto, port in netlink_only[:50]:
+                         self._listener_evidence(endpoint, "PROCFS_ONLY"), attack="T1014")
+        for endpoint in netlink_only[:50]:
             self.finding("HIDDEN_LISTENER", "high",
-                         "A listening socket appears in the netlink socket table (ss) but not in /proc/net; "
-                         "one of the two views is being filtered", "crossview://listeners",
-                         {"proto": proto, "port": port, "visible_in": "NETLINK_ONLY"}, attack="T1014")
+                         "A listening socket is repeatedly present in ss but absent from /proc/net; "
+                         "one kernel view may be filtered", "crossview://listeners",
+                         self._listener_evidence(endpoint, "NETLINK_ONLY"), attack="T1014")
         stats["listeners"] = {"procfs": len(stable), "netlink": len(netlink),
                               "procfs_only": len(procfs_only), "netlink_only": len(netlink_only)}
+        if suspects - confirmed:
+            stats["listeners"]["unconfirmed_netlink_only"] = len(suspects - confirmed)
 
     def _proc_mount_overlays(self, gaps: Gaps, stats: dict[str, Any]) -> None:
         mountinfo = self._proc_self() / "mountinfo"
@@ -2306,15 +2572,28 @@ class Audit:
         records = self._apk_records()
         modes: dict[str, int] = {}
         raw, status = safe_read(self.sys("/lib/apk/db/installed"), APK_DB_MAX_BYTES)
-        malformed = 0
+        malformed = omitted_lines = 0
+        truncated = False
         if raw is None:
-            self.read_gap(self.sys("/lib/apk/db/installed"), status, gaps)
-        if raw is not None:
+            if status == "ABSENT":
+                # A previously detected package manager lost its installed index.
+                gaps.add("READ_FAILED")
+            else:
+                self.read_gap(self.sys("/lib/apk/db/installed"), status, gaps)
+        else:
             db, stats = pk.parse_apk_installed(raw)
             malformed = stats["malformed"]
+            truncated = stats["truncated"]
+            if malformed:
+                gaps.add("MALFORMED_INPUT", malformed)
+            if truncated:
+                omitted_lines = len(raw.splitlines()) - stats["lines"]
+                gaps.add("ENUMERATION_LIMIT", omitted_lines)
             modes = {rel: info["mode"] for rel, info in db["files"].items() if "mode" in info}
         review = self._verify_recorded("apk", records, modes, gaps)
         review["unparsed_lines"] = malformed
+        review["reference_lines_omitted"] = omitted_lines
+        review["truncated"] = review["truncated"] or truncated
         return review
 
     def packages(self) -> None:
@@ -2381,6 +2660,12 @@ class Audit:
         else:
             gaps.add("NOT_IN_PROFILE")
             detail = "Package source trust settings and selected package metadata; integrity verification runs only in the deep profile"
+        if self.profile == "deep":
+            for manager, counts in self._package_db_gaps.items():
+                if manager in managers:
+                    integrity.setdefault(manager, {})["reference_db_omissions"] = dict(sorted(counts.items()))
+                    for code, count in counts.items():
+                        gaps.add(code, count)
         self.stats["repos"] = {"source_files_checked": len(repos), "insecure_source_files": insecure_repo_files}
         self.conclude("packages", detail, gaps, len(repos))
 

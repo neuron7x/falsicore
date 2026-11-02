@@ -20,9 +20,9 @@ gate kills nothing by accident.
     python3 tools/mutate.py --retry run.json          # only the open items of an earlier result
     python3 tools/mutate.py --coverage               # record the per-test coverage contexts first
 
-Exit status 1 when a mutant survives or has no tests, unless its line carries
-`# no mutate: <reason>` (an equivalence or non-behaviour annotation that must
-state its reason).
+Exit status 1 for surviving, untested, or incomplete mutants. Legacy inline
+`# no mutate:` comments are not exemptions: an entire source line cannot be
+certified equivalent to every behavioral mutation by assertion alone.
 """
 from __future__ import annotations
 
@@ -31,7 +31,6 @@ import ast
 import copy
 import json
 import os
-import queue
 import re
 import shutil
 import subprocess
@@ -47,7 +46,6 @@ PACKAGE = ROOT / "falsicore"
 WORK = ROOT / ".mutation"               # ignored by the release manifest and git
 COVERAGE_JSON = WORK / "coverage.json"
 SCHEMA = "falsicore.mutation.v1"
-NO_MUTATE = re.compile(r"#\s*no mutate:\s*\S")
 COMPARE_SWAP = {ast.Lt: ast.LtE, ast.LtE: ast.Lt, ast.Gt: ast.GtE, ast.GtE: ast.Gt, ast.Eq: ast.NotEq,
                 ast.NotEq: ast.Eq, ast.In: ast.NotIn, ast.NotIn: ast.In, ast.Is: ast.IsNot, ast.IsNot: ast.Is}
 AUG_SWAP = {ast.Add: ast.Sub, ast.Sub: ast.Add, ast.Mult: ast.FloorDiv, ast.BitOr: ast.BitAnd, ast.BitAnd: ast.BitOr}
@@ -61,7 +59,7 @@ class Mutant:
     original: str
     mutated: str
     mutant_id: str
-    status: str = "PENDING"        # KILLED | SURVIVED | NO_TESTS | TIMEOUT | ANNOTATED | ERROR
+    status: str = "PENDING"        # KILLED | SURVIVED | NO_TESTS | TIMEOUT | ERROR
     tests: int = 0
     seconds: float = 0.0
     detail: str = ""
@@ -168,8 +166,28 @@ def _replace(tree: ast.Module, target: ast.AST, replacement: ast.AST) -> ast.Mod
     return result
 
 
+def _mutate_span(source: str, node: ast.AST, replacement: ast.AST) -> str:
+    """Rewrite only the selected UTF-8 AST span, never unparse the entire file.
+
+    Python AST column offsets are UTF-8 bytes. Retaining unrelated source
+    bytes prevents source-sensitive tests from killing a formatting artifact.
+    """
+    raw = source.encode("utf-8")
+    lines = raw.splitlines(keepends=True)
+    line = node.lineno
+    end_line = getattr(node, "end_lineno", line)
+    start = sum(map(len, lines[:line - 1])) + node.col_offset
+    stop = sum(map(len, lines[:end_line - 1])) + getattr(node, "end_col_offset", node.col_offset)
+    prefix = lines[line - 1][:node.col_offset]
+    indent = prefix if not prefix.strip() else b""
+    token = ast.unparse(replacement).encode("utf-8").replace(b"\n", b"\n" + indent)
+    mutated = (raw[:start] + token + raw[stop:]).decode("utf-8")
+    ast.parse(mutated)
+    return mutated
+
+
 def generate(module: str, source: str, lines: set[int] | None = None) -> list[Mutant]:
-    """Every mutant of `source`; restricted to `lines` when given. Annotated lines are kept but marked."""
+    """Every mutant of `source`; restricted to `lines` when given. No comment waivers."""
     tree = ast.parse(source)
     source_lines = source.splitlines()
     sites = _Sites()
@@ -178,27 +196,26 @@ def generate(module: str, source: str, lines: set[int] | None = None) -> list[Mu
     counter: dict[int, int] = {}
     for node, operator, replacements, scope in sites.sites:
         line = getattr(node, "lineno", None)
-        if line is None or (lines is not None and line not in lines):
+        if line is None or (lines is not None and
+                            not any(line <= changed <= getattr(node, "end_lineno", line) for changed in lines)):
             continue
         for replacement in replacements:
-            mutated_tree = _replace(tree, node, replacement)
-            mutated_source = ast.unparse(mutated_tree)
+            mutated_source = _mutate_span(source, node, replacement)
             counter[line] = counter.get(line, 0) + 1
             mutant = Mutant(module=module, line=line, operator=operator,
                             original=source_lines[line - 1].strip() if line - 1 < len(source_lines) else "",
                             mutated=ast.unparse(replacement).splitlines()[0][:160],
                             mutant_id=f"{module}:{line}:{counter[line]}:{operator}", scope=scope)
-            if NO_MUTATE.search(mutant.original):
-                mutant.status = "ANNOTATED"
-                mutant.detail = mutant.original.split("# no mutate:", 1)[1].strip()
-            mutant.detail = mutant.detail or mutated_source  # carries the full source until execution
+            # Line-wide annotations are documentation, not mutation-specific proof.
+            # Including os.read bounds, every behavioral candidate is executed.
+            mutant.detail = mutated_source  # carries the full source until execution
             mutants.append(mutant)
     return mutants
 
 
 # ---- retry ---------------------------------------------------------------------
 
-OPEN_STATUSES = ("SURVIVED", "NO_TESTS", "ERROR", "NOT_RUN")
+OPEN_STATUSES = ("SURVIVED", "NO_TESTS", "ERROR", "NOT_RUN", "TIMEOUT")
 Signature = tuple[str, str, str]
 
 
@@ -207,8 +224,8 @@ def open_signatures(result: dict) -> dict[str, set[Signature]]:
 
     Lines move when unrelated code is edited; the signature does not, so a
     killer-writing cycle re-runs exactly the mutants that were open. A line
-    that has since been annotated changes its text and drops out: the full run
-    reports it as ANNOTATED.
+    that has acquired comments must be remeasured in a fresh full run; a
+    comment cannot establish operator-specific equivalence.
     """
     out: dict[str, set[Signature]] = {}
     for m in result["mutants"]:
@@ -287,19 +304,25 @@ def run_mutant(mutant: Mutant, tests: set[str] | None, workdir: Path, python: st
     """Write the mutated module into a fresh tree copy and run the selected tests with fail-fast."""
     started = time.monotonic()
     if mutant.status == "ANNOTATED":
+        mutant.status, mutant.detail = "ERROR", "unverified mutation waiver rejected"
         return mutant
     if tests is not None and not tests:
         mutant.status, mutant.detail = "NO_TESTS", ""
         return mutant
     target = workdir / "falsicore" / f"{mutant.module}.py"
     original = target.read_text()
+    manifest_path = workdir / "SOURCE_MANIFEST.sha256"
+    original_manifest = manifest_path.read_bytes() if manifest_path.is_file() else None
     try:
         target.write_text(mutant.detail + "\n")
         mutant.detail = ""
         # Test ids from coverage contexts are relative to tests/ (unittest discover -s tests).
         env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "FALSICORE_PBT_EXAMPLES": "30", "PYTHONPATH": "tests"}
-        subprocess.run([python, "-B", "tools/build_release.py", "--write-manifest"], cwd=str(workdir), env=env,
-                       capture_output=True, timeout=120)
+        manifest_write = subprocess.run(
+            [python, "-B", "tools/build_release.py", "--write-manifest"],
+            cwd=str(workdir), env=env, capture_output=True, timeout=120)
+        if manifest_write.returncode != 0:
+            raise RuntimeError("mutated manifest regeneration failed")
         if tests:
             argv = [python, "-B", "-m", "unittest", "-f", "-q", *sorted(tests)]
             mutant.tests = len(tests)
@@ -316,12 +339,22 @@ def run_mutant(mutant: Mutant, tests: set[str] | None, workdir: Path, python: st
                 mutant.detail = failing[0] if failing else proc.stderr.strip().splitlines()[-1][:160] if proc.stderr.strip() else ""
         except subprocess.TimeoutExpired:
             mutant.status, mutant.detail = "TIMEOUT", f"{timeout:.0f}s"
-    except (OSError, SyntaxError) as exc:
+    except (OSError, SyntaxError, RuntimeError, subprocess.TimeoutExpired) as exc:
         mutant.status, mutant.detail = "ERROR", type(exc).__name__
     finally:
-        target.write_text(original)
-        subprocess.run([python, "-B", "tools/build_release.py", "--write-manifest"], cwd=str(workdir),
-                       capture_output=True, timeout=120)
+        try:
+            # The test may leave generated output in the disposable checkout.
+            # Regenerating a manifest here can fail on that output and erase a
+            # legitimate KILLED/SURVIVED result; restore the exact baseline bytes.
+            target.write_text(original)
+            if manifest_path.is_symlink():
+                raise OSError("manifest replaced by symlink")
+            if original_manifest is None:
+                manifest_path.unlink(missing_ok=True)
+            else:
+                manifest_path.write_bytes(original_manifest)
+        except OSError:
+            mutant.status, mutant.detail = "ERROR", "tree restoration failed"
     mutant.seconds = round(time.monotonic() - started, 2)
     return mutant
 
@@ -332,7 +365,7 @@ def changed_lines(base: str) -> dict[str, set[int]]:
     if git is None:
         raise SystemExit("git is required for --diff")
     out = subprocess.run([git, "diff", "-U0", base, "--", "falsicore/"], cwd=str(ROOT), capture_output=True,
-                         text=True, check=True).stdout
+                         text=True, check=True, timeout=120).stdout
     return parse_diff(out)
 
 
@@ -367,24 +400,26 @@ def run(modules: dict[str, set[int] | None], workers: int, timeout: float, pytho
         mutants.extend(generated)
         selection[module] = covering_tests(coverage_json, module)
     with tempfile.TemporaryDirectory(prefix="falsicore-mutants-") as tmp:
-        trees = [Path(tmp) / f"w{i}" for i in range(max(1, workers))]
-        for tree in trees:
-            _fresh_tree(tree)
-        free: queue.Queue[Path] = queue.Queue()
-        for tree in trees:
-            free.put(tree)
-
         def work(mutant: Mutant) -> Mutant:
             if budget is not None and time.monotonic() - started > budget:
                 mutant.status, mutant.detail = "NOT_RUN", "budget"
                 return mutant
             tests = select_tests(selection[mutant.module], mutant)
-            tree = free.get()           # a tree is held by exactly one running mutant
+            if tests is not None and not tests:
+                mutant.status, mutant.detail = "NO_TESTS", ""
+                return mutant
+            # Never reuse a checkout across mutants. A failing/timeout test can
+            # leave files or spawned work behind; pooled worktrees contaminated
+            # later mutants and caused thousands of spurious manifest errors.
             try:
-                return run_mutant(mutant, tests, tree, python, timeout)
-            finally:
-                free.put(tree)
-        with ThreadPoolExecutor(max_workers=len(trees)) as pool:
+                with tempfile.TemporaryDirectory(prefix="case-", dir=tmp) as case:
+                    tree = Path(case) / "checkout"
+                    _fresh_tree(tree)
+                    return run_mutant(mutant, tests, tree, python, timeout)
+            except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+                mutant.status, mutant.detail = "ERROR", f"isolated checkout: {type(exc).__name__}"
+                return mutant
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
             results = list(pool.map(work, mutants))
     counts: dict[str, int] = {}
     for m in results:
@@ -397,9 +432,9 @@ def run(modules: dict[str, set[int] | None], workers: int, timeout: float, pytho
         "operators": sorted({m.operator.split(":")[0] for m in results}),
         "modules": sorted(modules), "counts": counts, "mutation_score": None if score is None else round(score, 4),
         "mutants": [asdict(m) for m in results],
-        "interpretation": "KILLED: a test failed. TIMEOUT: the suite hung (noticed, not open). SURVIVED: no test noticed. NO_TESTS: no test executes the line. "
-                          "ANNOTATED: '# no mutate: <reason>' on the line. Survivors are candidates, not verdicts: "
-                          "equivalence must be shown, not assumed.",
+        "interpretation": "KILLED: a test failed. TIMEOUT: an incomplete measurement and release blocker. SURVIVED: no test noticed. NO_TESTS: no test executes the line. "
+                          "No line-wide annotation exemptions are applied. Survivors remain open until "
+                          "tested or individually proven equivalent.",
     }
 
 
@@ -465,10 +500,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.markdown:
         args.markdown.write_text(markdown(result))
     print(markdown(result), end="")
-    # A mutant that hangs the suite was noticed (the run did not finish): it is
-    # reported but is not an open item. Survivors, untested lines and errors are.
-    open_items = sum(result["counts"].get(k, 0) for k in ("SURVIVED", "NO_TESTS", "ERROR"))
-    return 0 if args.allow_survivors or open_items == 0 else 1
+    # A hanging test suite may reflect infrastructure failure or a real fault;
+    # it is neither a verified kill nor permission to release. Fail closed.
+    # --allow-survivors only permits exploratory survivor measurements.
+    incomplete = sum(result["counts"].get(k, 0) for k in ("ERROR", "NOT_RUN", "ANNOTATED", "TIMEOUT"))
+    open_items = sum(result["counts"].get(k, 0) for k in ("SURVIVED", "NO_TESTS"))
+    no_selection = not result["mutants"]
+    if no_selection:
+        print("Mutation target produced zero mutants: NOT_MEASURED", file=sys.stderr)
+    return 0 if not incomplete and not no_selection and (args.allow_survivors or not open_items) else 1
 
 
 if __name__ == "__main__":

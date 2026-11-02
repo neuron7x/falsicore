@@ -293,9 +293,10 @@ def _ss_listener_endpoints(output: str) -> set[tuple[str, str, int]] | None:
             continue
         if fields[0] not in ("tcp", "udp", "tcp6", "udp6"):
             continue
-        # Even a non-listener row must be complete and recognizable: a
-        # corrupted state field can otherwise fabricate a PROCFS_ONLY alarm.
-        if len(fields) < 6 or not d.ss_state_supported(fields[0], fields[1]):
+        # A known but truncated row is not proof of absence, even when its
+        # state is non-listening. Five fields suffice to identify a listener's
+        # local address; the peer column is not used by this cross-view parser.
+        if len(fields) < 5 or not d.ss_state_supported(fields[0], fields[1]):
             return None
         if fields[1] not in ("LISTEN", "UNCONN"):
             continue

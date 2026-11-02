@@ -369,10 +369,12 @@ class CrossViewFixture(unittest.TestCase):
         self.assertNotIn("HIDDEN_LISTENER", self.rules())
 
 
-    def test_two_field_non_listener_is_ignored_not_dropped_as_truncated(self):
-        # FC-13/FC-23: exactly two fields can describe an irrelevant state.
-        # Rejecting it as a malformed listener masks other valid observations.
-        self.assertEqual(collectors._ss_listener_endpoints("tcp ESTAB\n"), set())
+    def test_two_field_non_listener_is_incomplete_but_valid_nonlistener_is_ignored(self):
+        # A truncated non-listener is incomplete evidence, not proof that
+        # another socket was absent; a complete benign non-listener is ignored.
+        self.assertIsNone(collectors._ss_listener_endpoints("tcp ESTAB\n"))
+        self.assertEqual(collectors._ss_listener_endpoints(
+            "tcp ESTAB 0 0 127.0.0.1:5000\n"), set())
         self.assertIsNone(collectors._ss_listener_endpoints("tcp\n"))
 
     def test_mountinfo_skips_other_mounts_and_checks_proc_superblock(self):

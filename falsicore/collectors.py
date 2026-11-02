@@ -941,7 +941,10 @@ class Audit:
             self.checked("network", "UNAVAILABLE" if r["status"] == "UNAVAILABLE" else "FAILED",
                          "ss unavailable or failed; no active network scan", gaps=gaps)
             return
-        sockets = d.parse_ss(r["stdout"])
+        parse_issues: dict[str, int] = {}
+        sockets = d.parse_ss(r["stdout"], parse_issues=parse_issues)
+        if parse_issues.get("malformed_rows", 0):
+            gaps.add("MALFORMED_INPUT", parse_issues["malformed_rows"])
         self.listening_ports: dict[str, set[str]] = {}
         for sock in sockets:
             if sock["state"] == "LISTEN":
@@ -971,6 +974,7 @@ class Audit:
                     self.private_index["net_" + d.digest(remote)] = remote
         self.baseline["listeners"] = sorted(observed)
         self.stats["network"] = {"socket_count": len(sockets), "states": dict(counts),
+                                 "malformed_rows": parse_issues.get("malformed_rows", 0),
                                  "listeners": exposed[:150], "listeners_truncated": max(0, len(exposed)-150),
                                  "process_attribution_available": sum(s["has_process_info"] for s in sockets)}
         missing_owner = sum(s["state"] == "LISTEN" and not s["has_process_info"] for s in sockets)

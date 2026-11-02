@@ -186,6 +186,55 @@ class CollectorFixtureTests(unittest.TestCase):
         self.assertNotIn("9222", self.a.listening_ports)
         self.assertEqual(evidence["debug_port_listener"], "NOT_OBSERVED")
 
+
+    def test_successful_ss_with_short_tcp_listener_is_partial_not_absent(self):
+        evidence, coverage = self._debug_port_ss_case("COMPLETED", "tcp LISTEN\n")
+        self.assertEqual(coverage["status"], "PARTIAL")
+        self.assertEqual(coverage["reason_codes"]["MALFORMED_INPUT"], 1)
+        self.assertEqual(self.a.stats["network"]["malformed_rows"], 1)
+        self.assertEqual(evidence["debug_port_listener"], "UNKNOWN")
+
+    def test_ss_listener_missing_peer_is_not_accepted_as_complete(self):
+        evidence, coverage = self._debug_port_ss_case(
+            "COMPLETED", "tcp LISTEN 0 128 0.0.0.0:9222\n",
+        )
+        self.assertEqual(coverage["reason_codes"]["MALFORMED_INPUT"], 1)
+        self.assertEqual(coverage["status"], "PARTIAL")
+        self.assertNotIn("9222", self.a.listening_ports)
+        self.assertEqual(evidence["debug_port_listener"], "UNKNOWN")
+
+    def test_invalid_ss_local_port_cannot_establish_debug_listener_absence(self):
+        evidence, coverage = self._debug_port_ss_case(
+            "COMPLETED", "tcp LISTEN 0 128 0.0.0.0:not-a-port 0.0.0.0:*\n",
+        )
+        self.assertEqual(coverage["status"], "PARTIAL")
+        self.assertEqual(coverage["reason_codes"]["MALFORMED_INPUT"], 1)
+        self.assertNotIn("9222", self.a.listening_ports)
+        self.assertEqual(evidence["debug_port_listener"], "UNKNOWN")
+
+    def test_malformed_ss_rows_counted_without_erasing_valid_positive_listener(self):
+        evidence, coverage = self._debug_port_ss_case(
+            "COMPLETED",
+            "tcp LISTEN\n"
+            "tcp LISTEN 0 128 0.0.0.0:bad 0.0.0.0:*\n"
+            "tcp LISTEN 0 128 0.0.0.0:9222 0.0.0.0:*\n",
+        )
+        self.assertEqual(coverage["status"], "PARTIAL")
+        self.assertEqual(coverage["reason_codes"]["MALFORMED_INPUT"], 2)
+        self.assertEqual(self.a.stats["network"]["malformed_rows"], 2)
+        self.assertEqual(evidence["debug_port_listener"], "LISTENING_BEYOND_LOOPBACK")
+
+    def test_valid_ss_header_blank_and_loopback_listener_benign_twin(self):
+        evidence, coverage = self._debug_port_ss_case(
+            "COMPLETED",
+            "\nNetid State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+            "tcp LISTEN 0 128 127.0.0.1:9222 0.0.0.0:*\n",
+        )
+        self.assertEqual(coverage["status"], "COMPLETED")
+        self.assertEqual(coverage["reason_codes"], {})
+        self.assertEqual(self.a.stats["network"]["malformed_rows"], 0)
+        self.assertEqual(evidence["debug_port_listener"], "LISTENING_LOOPBACK_ONLY")
+
     def test_persistence_systemd_shell_and_authorized_keys(self):
         unit = self.home / ".config/systemd/user/sus.service"
         key = self.home / ".ssh/authorized_keys"

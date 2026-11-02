@@ -287,20 +287,24 @@ def endpoint_class(endpoint: str) -> str:
     return "other"
 
 
-def parse_ss(text: str) -> list[dict]:
-    """ss -H -tuna[p] output. No remote IP addresses are returned."""
+def parse_ss(text: str, *, parse_issues: dict[str, int] | None = None) -> list[dict]:
+    """Parse ss -H -tuna[p]; count unparseable known-protocol rows without exporting raw endpoints."""
     out = []
     for line in text.splitlines():
         bits = line.split()
-        if len(bits) < 5:
+        if not bits or bits[0] not in ("tcp", "udp", "tcp6", "udp6"):
+            continue
+        if len(bits) < 6:
+            if parse_issues is not None:
+                parse_issues["malformed_rows"] = parse_issues.get("malformed_rows", 0) + 1
             continue
         proto, state = bits[0], bits[1]
-        local, remote = bits[4], bits[5] if len(bits) > 5 else ""
-        if proto not in ("tcp", "udp", "tcp6", "udp6"):
-            continue
+        local, remote = bits[4], bits[5]
         port = local.rsplit(":", 1)[-1]   # no mutate: the last element is the same for any maxsplit >= 1
-        if not port.isdigit():
+        if ":" not in local or not port.isdigit():
             port = "?"
+            if parse_issues is not None:
+                parse_issues["malformed_rows"] = parse_issues.get("malformed_rows", 0) + 1
         out.append({
             "proto": proto, "state": state, "local_class": endpoint_class(local),
             "local_port": port, "remote_class": endpoint_class(remote),

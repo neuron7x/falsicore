@@ -195,6 +195,8 @@ def _run_bounded(binary: str, args: list[str], timeout: float, limit: int,
                 except ProcessLookupError:
                     pass
                 except PermissionError:
+                    # Successful output is not a complete observation if probe cleanup was denied.
+                    status = "FAILED"
                     error = error or "PROCESS_GROUP_CLEANUP_DENIED"
                 try:
                     reaped = proc.wait(timeout=2)  # no mutate: grace period for the kernel to reap after SIGKILL

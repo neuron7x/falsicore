@@ -2245,7 +2245,9 @@ class Audit:
         probed = 0
         candidates: list[int] = []
         for pid in range(1, pid_max + 1):
-            if pid % PID_SWEEP_CHUNK == 0 and self.over_budget():
+            # Observe pre-expired deadlines before the first PID probe; then
+            # amortize deadline checks at fixed PID_SWEEP_CHUNK intervals.
+            if (pid - 1) % PID_SWEEP_CHUNK == 0 and self.over_budget():
                 gaps.add("BUDGET_EXHAUSTED")
                 break
             probed += 1

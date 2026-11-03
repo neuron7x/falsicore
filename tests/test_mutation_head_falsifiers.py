@@ -196,6 +196,52 @@ class ProcVisibilityResultCounters(unittest.TestCase):
 
 
 
+    def test_preexpired_pid_budget_stops_before_first_probe(self):
+        # A PID range smaller than the check interval must not silently
+        # bypass an already-expired scan budget.
+        self.mount.write_bytes(ProcMountAdversarialFormat.VALID)
+        self.pid_max.write_text("3")
+        self.audit.over_budget = lambda: True
+        self.audit.pid_probe = lambda _pid: self.fail("expired budget must not initiate PID probes")
+        gaps, result = self.measure()
+        self.assertEqual(result["pid_max_probed"], 0)
+        self.assertEqual(result["candidates"], 0)
+        self.assertEqual(gaps.incomplete["BUDGET_EXHAUSTED"], 1)
+
+    def test_budget_rechecked_at_start_of_next_pid_chunk(self):
+        # For chunk=2, probes 1 and 2 are allowed; before probe 3, a newly
+        # expired deadline must be observed (negative control for off-by-one).
+        self.mount.write_bytes(ProcMountAdversarialFormat.VALID)
+        self.pid_max.write_text("5")
+        seen = []
+
+        def probe(pid):
+            seen.append(pid)
+            return False
+
+        self.audit.pid_probe = probe
+        self.audit.over_budget = lambda: len(seen) >= 2
+        with patch.object(collectors, "PID_SWEEP_CHUNK", 2):
+            gaps, result = self.measure()
+        self.assertEqual(seen, [1, 2])
+        self.assertEqual(result["pid_max_probed"], 2)
+        self.assertEqual(gaps.incomplete["BUDGET_EXHAUSTED"], 1)
+
+    def test_benign_unexpired_pid_budget_probes_every_pid(self):
+        # Benign twin: an OR-instead-of-AND mutant must not truncate a scan
+        # merely because the PID is at a periodic checkpoint.
+        self.mount.write_bytes(ProcMountAdversarialFormat.VALID)
+        self.pid_max.write_text("3")
+        seen = []
+        self.audit.over_budget = lambda: False
+        self.audit.pid_probe = lambda pid: seen.append(pid) or False
+        with patch.object(collectors, "PID_SWEEP_CHUNK", 2):
+            gaps, result = self.measure()
+        self.assertEqual(seen, [1, 2, 3])
+        self.assertEqual(result["pid_max_probed"], 3)
+        self.assertFalse(gaps.incomplete)
+
+
 class LexicalRecursionBudget(unittest.TestCase):
     def test_balanced_default_nesting_budget_has_a_strict_boundary(self):
         # Alternating double quotes and command substitutions cost two levels

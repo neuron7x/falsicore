@@ -287,20 +287,45 @@ def endpoint_class(endpoint: str) -> str:
     return "other"
 
 
-def parse_ss(text: str) -> list[dict]:
-    """ss -H -tuna[p] output. No remote IP addresses are returned."""
+# Unknown state text is not evidence that a TCP/UDP socket was not listening.
+# Fail closed instead of inferring absence from an unrecognized ss -H -tuna row.
+_SS_TCP_STATES = frozenset({
+    "ESTAB", "ESTABLISHED", "SYN-SENT", "SYN-RECV", "NEW-SYN-RECV",
+    "FIN-WAIT-1", "FIN-WAIT-2", "TIME-WAIT", "CLOSE", "CLOSED",
+    "CLOSE-WAIT", "LAST-ACK", "LISTEN", "CLOSING", "BOUND",
+})
+_SS_UDP_STATES = frozenset({"UNCONN", "ESTAB", "ESTABLISHED", "CONNECTED", "BOUND"})
+
+
+def ss_state_supported(proto: str, state: str) -> bool:
+    """Recognize known socket states; unknown output makes the table incomplete."""
+    if proto in ("tcp", "tcp6"):
+        return state in _SS_TCP_STATES
+    if proto in ("udp", "udp6"):
+        return state in _SS_UDP_STATES
+    return False
+
+
+def parse_ss(text: str, *, parse_issues: dict[str, int] | None = None) -> list[dict]:
+    """Parse ss -H -tuna[p]; count unparseable known-protocol rows without exporting raw endpoints."""
     out = []
     for line in text.splitlines():
         bits = line.split()
-        if len(bits) < 5:
+        if not bits or bits[0] not in ("tcp", "udp", "tcp6", "udp6"):
+            continue
+        if len(bits) < 6:
+            if parse_issues is not None:
+                parse_issues["malformed_rows"] = parse_issues.get("malformed_rows", 0) + 1
             continue
         proto, state = bits[0], bits[1]
-        local, remote = bits[4], bits[5] if len(bits) > 5 else ""
-        if proto not in ("tcp", "udp", "tcp6", "udp6"):
-            continue
+        if not ss_state_supported(proto, state) and parse_issues is not None:
+            parse_issues["malformed_rows"] = parse_issues.get("malformed_rows", 0) + 1
+        local, remote = bits[4], bits[5]
         port = local.rsplit(":", 1)[-1]   # no mutate: the last element is the same for any maxsplit >= 1
-        if not port.isdigit():
+        if ":" not in local or not port.isdigit():
             port = "?"
+            if parse_issues is not None:
+                parse_issues["malformed_rows"] = parse_issues.get("malformed_rows", 0) + 1
         out.append({
             "proto": proto, "state": state, "local_class": endpoint_class(local),
             "local_port": port, "remote_class": endpoint_class(remote),
@@ -344,8 +369,10 @@ def interpret_verdict(findings: list[dict], coverage: list[dict]) -> str:
     # On an offline image the live-only checks are declared, not missing: the
     # verdict then speaks about the disk, and the coverage rows say so.
     offline = {x.get("check") for x in coverage
-               if "LIVE_ONLY_NOT_IN_OFFLINE_IMAGE" in (x.get("reason_codes") or {}) or
-               "LIVE_ONLY_NOT_IN_OFFLINE_IMAGE" in (x.get("scope_limits") or {})}
+               if x.get("status") == "SKIPPED" and x.get("check") in
+               {"processes", "network", "crossview"} and (
+                   "LIVE_ONLY_NOT_IN_OFFLINE_IMAGE" in (x.get("reason_codes") or {}) or
+                   "LIVE_ONLY_NOT_IN_OFFLINE_IMAGE" in (x.get("scope_limits") or {}))}
     essential -= offline
     incomplete = [x for x in coverage if x.get("check") in essential and x.get("status") != "COMPLETED"]
     observed = {x.get("check") for x in coverage}

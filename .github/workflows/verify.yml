@@ -8,6 +8,8 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+env:
+  FALSICORE_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 concurrency:
   group: verify-${{ github.ref }}
   cancel-in-progress: true
@@ -23,13 +25,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Assert exact PR head (never a synthetic merge checkout)
+        run: test "$(git rev-parse HEAD)" = "$FALSICORE_EXPECTED_HEAD_SHA"
       - name: Source manifest is current and intact
         run: |
           sha256sum -c SOURCE_MANIFEST.sha256
           python tools/build_release.py --check-manifest
+      - name: Validate immutable source act and every task record
+        shell: bash
+        run: |
+          set -euo pipefail
+          ( cd docs/verification/source && sha256sum -c AUDIT_CHECKSUMS.txt )
+          python assurance/check_registry.py
+          python -m unittest discover -s assurance -q
       - name: Syntax
         run: python -m compileall -q falsicore falsicore.py tools
       - name: Install property-testing library (CI only; the tool stays stdlib)
@@ -44,8 +56,6 @@ jobs:
         run: python -m tools.evaluate_rules
       - name: Detection validity (planted artifacts vs benign twins; committed table current)
         run: python tools/validity.py --check
-      - name: Release evidence names this version and a green suite
-        run: python tools/release_evidence.py --check
       - name: Reproducible builds and packaged self-test
         if: matrix.python-version == '3.13'
         shell: bash
@@ -62,6 +72,31 @@ jobs:
           mkdir -m 700 "$RUNNER_TEMP/runs"
           python -I "$RUNNER_TEMP/a.pyz" scan --profile quick --output-base "$RUNNER_TEMP/runs"
           git diff --exit-code
+  evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Assert exact PR head (never a synthetic merge checkout)
+        run: test "$(git rev-parse HEAD)" = "$FALSICORE_EXPECTED_HEAD_SHA"
+      - name: Install required evidence measurement dependencies
+        run: python -m pip install --disable-pip-version-check hypothesis==6.135.26 coverage==7.13.3 ruff==0.15.22 bandit==1.8.6 mypy==1.18.2
+      - name: Measure a source-bound receipt
+        run: python tools/release_receipt.py --output "$RUNNER_TEMP/RELEASE_RECEIPT.json"
+      - name: Independently validate recorded measurements
+        run: python tools/release_receipt.py --check --output "$RUNNER_TEMP/RELEASE_RECEIPT.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: release-receipt-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/RELEASE_RECEIPT.json
+          if-no-files-found: error
   mutation-diff:
     # New or changed runtime lines must arrive with tests that notice when they are wrong.
     if: github.event_name == 'pull_request'
@@ -71,10 +106,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
+      - name: Assert exact PR head (never a synthetic merge checkout)
+        run: test "$(git rev-parse HEAD)" = "$FALSICORE_EXPECTED_HEAD_SHA"
       - name: Install coverage and Hypothesis (CI only)
         run: python -m pip install --disable-pip-version-check coverage==7.13.3 hypothesis==6.135.26
       - name: Record per-test coverage contexts
@@ -84,21 +122,32 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: mutation-diff-${{ github.sha }}
+          name: mutation-diff-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             mutation-diff.json
             mutation-diff.md
           if-no-files-found: ignore
   static-analysis:
+    # Branch protection currently requires this job, not the separate
+    # evidence job. Make the required status fail whenever evidence does.
+    needs: evidence
+    if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
+      - name: Required evidence dependency must have succeeded
+        env:
+          EVIDENCE_JOB_RESULT: ${{ needs.evidence.result }}
+        run: test "$EVIDENCE_JOB_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
+      - name: Assert exact PR head (never a synthetic merge checkout)
+        run: test "$(git rev-parse HEAD)" = "$FALSICORE_EXPECTED_HEAD_SHA"
       # Exact pins (no hash lock: transitive wheels differ per platform). CI only;
       # the shipped tool has no third-party dependencies.
       - name: Install pinned analysis tools (CI only)

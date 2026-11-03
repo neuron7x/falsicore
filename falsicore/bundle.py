@@ -5,6 +5,7 @@ Compare the separately published SHA-256 before executing this application.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -26,42 +27,52 @@ MAX_TOTAL = 20 * 1024 * 1024
 
 def read_verified_bundle(path: Path) -> dict[str, bytes]:
     """Validate a bounded, regular-file-only bundle before using its payload."""
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("Application must be a regular file, not a symlink")
-    if path.stat().st_size > MAX_TOTAL:
-        raise ValueError("Application size limit exceeded")
-    with zipfile.ZipFile(path) as archive:
-        entries = archive.infolist()
-        names = [entry.filename for entry in entries]
-        if len(entries) > MAX_MEMBERS or len(names) != len(set(names)):
-            raise ValueError("Duplicate members or excessive bundle size")
-        if MANIFEST not in names:
-            raise ValueError("Bundle manifest missing")
-        if sum(e.file_size for e in entries) > MAX_TOTAL:
-            raise ValueError("Expanded bundle size limit exceeded")
-        for entry in entries:
-            p = PurePosixPath(entry.filename)
-            mode = entry.external_attr >> 16
-            if (p.is_absolute() or any(x in {".", "..", ""} for x in entry.filename.split("/"))
-                    or "\\" in entry.filename or any(ord(c) < 32 for c in entry.filename)
-                    or entry.is_dir() or stat.S_ISLNK(mode)
-                    or stat.S_IFMT(mode) not in (0, stat.S_IFREG)
-                    or entry.file_size > MAX_MEMBER):
-                raise ValueError("Unsafe bundle member")
-        manifest = json.loads(archive.read(MANIFEST))
-        if not isinstance(manifest, dict) or manifest.get("schema") != "falsicore.bundle.v1":
-            raise ValueError("Unsupported bundle manifest")
-        expected = manifest.get("sha256")
-        if not isinstance(expected, dict) or set(expected) != set(names) - {MANIFEST}:
-            raise ValueError("Bundle members do not match manifest")
-        result: dict[str, bytes] = {}
-        for name in sorted(expected):
-            raw = archive.read(name)
-            digest = expected[name]
-            if (not isinstance(digest, str) or len(digest) != 64
-                    or hashlib.sha256(raw).hexdigest() != digest):
-                raise ValueError("Bundle member checksum mismatch")
-            result[name] = raw
+    # Pin the inode before preflight: re-opening a checked pathname permits
+    # a symlink swap to substitute a different, self-consistently hashed ZIP.
+    try:
+        source_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise ValueError("Application must be a regular file, not a symlink") from exc
+        raise
+    with os.fdopen(source_fd, "rb") as source:
+        metadata = os.fstat(source.fileno())
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("Application must be a regular file, not a symlink")
+        if metadata.st_size > MAX_TOTAL:
+            raise ValueError("Application size limit exceeded")
+        with zipfile.ZipFile(source) as archive:
+            entries = archive.infolist()
+            names = [entry.filename for entry in entries]
+            if len(entries) > MAX_MEMBERS or len(names) != len(set(names)):
+                raise ValueError("Duplicate members or excessive bundle size")
+            if MANIFEST not in names:
+                raise ValueError("Bundle manifest missing")
+            if sum(e.file_size for e in entries) > MAX_TOTAL:
+                raise ValueError("Expanded bundle size limit exceeded")
+            for entry in entries:
+                p = PurePosixPath(entry.filename)
+                mode = entry.external_attr >> 16
+                if (p.is_absolute() or any(x in {".", "..", ""} for x in entry.filename.split("/"))
+                        or "\\" in entry.filename or any(ord(c) < 32 for c in entry.filename)
+                        or entry.is_dir() or stat.S_ISLNK(mode)
+                        or stat.S_IFMT(mode) not in (0, stat.S_IFREG)
+                        or entry.file_size > MAX_MEMBER):
+                    raise ValueError("Unsafe bundle member")
+            manifest = json.loads(archive.read(MANIFEST))
+            if not isinstance(manifest, dict) or manifest.get("schema") != "falsicore.bundle.v1":
+                raise ValueError("Unsupported bundle manifest")
+            expected = manifest.get("sha256")
+            if not isinstance(expected, dict) or set(expected) != set(names) - {MANIFEST}:
+                raise ValueError("Bundle members do not match manifest")
+            result: dict[str, bytes] = {}
+            for name in sorted(expected):
+                raw = archive.read(name)
+                digest = expected[name]
+                if (not isinstance(digest, str) or len(digest) != 64
+                        or hashlib.sha256(raw).hexdigest() != digest):
+                    raise ValueError("Bundle member checksum mismatch")
+                result[name] = raw
     return result
 
 

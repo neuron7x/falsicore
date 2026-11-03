@@ -51,7 +51,7 @@ LIMITATION_CODES = frozenset({
     "TOKEN_LIMIT", "UNTERMINATED_HEREDOC", "UNPARSED_QUOTING", "EXPANSION_NOT_RESOLVED",
     "INLINE_INTERPRETER_CODE_NOT_ANALYZED", "MISSING_SHELL_COMMAND_OPERAND",
     "HEREDOC_EXPANSION_NOT_RESOLVED", "NESTING_LIMIT", "INPUT_LIMIT",
-    "INCOMPLETE_CONTINUATION", "NUL_IN_INPUT",
+    "INCOMPLETE_CONTINUATION", "NUL_IN_INPUT", "PARAMETER_EXPANSION_NOT_ANALYZED",
 })
 
 
@@ -90,8 +90,17 @@ class _Unterminated(Exception):
     pass
 
 
-def _balanced(text: str, i: int, opener: str = "(", closer: str = ")") -> int:
-    """Index just past the closer matching text[i-1] == opener; quote-aware."""
+class _NestingLimit(_Unterminated):
+    """Lexical nesting is bounded independently of command-analysis depth."""
+
+
+MAX_LEX_NESTING = 48
+
+
+def _balanced(text: str, i: int, opener: str = "(", closer: str = ")", nesting: int = 0) -> int:
+    """Index just past the closer; bound recursive quote/expression descent."""
+    if nesting >= MAX_LEX_NESTING:
+        raise _NestingLimit
     depth, n = 1, len(text)
     while i < n:
         c = text[i]
@@ -105,10 +114,12 @@ def _balanced(text: str, i: int, opener: str = "(", closer: str = ")") -> int:
             i = j + 1
             continue
         if c == '"':
-            i = _double_quote_end(text, i + 1)
+            i = _double_quote_end(text, i + 1, nesting + 1)
             continue
         if c == opener:
             depth += 1
+            if depth >= MAX_LEX_NESTING:
+                raise _NestingLimit
         elif c == closer:
             depth -= 1
             if depth == 0:
@@ -117,7 +128,9 @@ def _balanced(text: str, i: int, opener: str = "(", closer: str = ")") -> int:
     raise _Unterminated
 
 
-def _double_quote_end(text: str, i: int) -> int:
+def _double_quote_end(text: str, i: int, nesting: int = 0) -> int:
+    if nesting >= MAX_LEX_NESTING:
+        raise _NestingLimit
     n = len(text)
     while i < n:
         c = text[i]
@@ -127,11 +140,11 @@ def _double_quote_end(text: str, i: int) -> int:
         if c == '"':
             return i + 1
         if c == "$" and text.startswith("$(", i):
-            i = _balanced(text, i + 2)
+            i = _balanced(text, i + 2, nesting=nesting + 1)
             continue
         if c == "$" and text.startswith("${", i):
             # Quotes nest inside a brace expansion: "${x#"y"}" is one word (P-11).
-            i = _balanced(text, i + 2, "{", "}")
+            i = _balanced(text, i + 2, "{", "}", nesting=nesting + 1)
             continue
         if c == "`":
             j = _backtick_end(text, i + 1)
@@ -153,7 +166,7 @@ def _backtick_end(text: str, i: int) -> int:
     raise _Unterminated
 
 
-def _dollar(text: str, i: int, word: Word) -> int:
+def _dollar(text: str, i: int, word: Word, gaps: set[str] | None = None) -> int:
     """Consume an expansion starting at text[i] == '$'. Returns next index.
 
     Variables become a marker that keeps the name (\x00VAR:NAME\x00) so a
@@ -173,6 +186,11 @@ def _dollar(text: str, i: int, word: Word) -> int:
     if nxt == "{":
         end = _balanced(text, i + 2, "{", "}")
         inner = text[i + 2:end - 1]
+        # The static subset cannot safely resolve shell code nested in a
+        # parameter expansion. Preserve an explicit incomplete result rather
+        # than silently treating the expression as an ordinary variable.
+        if gaps is not None and ("$(" in inner or "`" in inner):
+            gaps.add("PARAMETER_EXPANSION_NOT_ANALYZED")
         word.expands = True
         word.text += "\x00VAR:%s\x00" % (inner if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", inner) else "?")
         return end
@@ -289,7 +307,7 @@ def _lex(text: str, gaps: set[str]) -> list[Word | Op]:
                         w.text += inner[k + 1]
                         k += 2
                     elif inner[k] == "$":
-                        k = _dollar(inner, k, w)
+                        k = _dollar(inner, k, w, gaps)
                     elif inner[k] == "`":
                         j = _backtick_end(inner, k + 1)
                         w.subs.append(inner[k + 1:j - 1])
@@ -304,7 +322,7 @@ def _lex(text: str, gaps: set[str]) -> list[Word | Op]:
                 continue
             if c == "$":
                 start = i
-                i = _dollar(text, i, cur())
+                i = _dollar(text, i, cur(), gaps)
                 line += text.count("\n", start, i)
                 continue
             if c == "`":
@@ -316,6 +334,10 @@ def _lex(text: str, gaps: set[str]) -> list[Word | Op]:
                 line += text.count("\n", i, j)
                 i = j
                 continue
+        except _NestingLimit:
+            gaps.add("NESTING_LIMIT")
+            flush()
+            return tokens
         except _Unterminated:
             gaps.add("UNPARSED_QUOTING")
             flush()
@@ -328,6 +350,10 @@ def _lex(text: str, gaps: set[str]) -> list[Word | Op]:
         if op in ("<", ">") and text.startswith("(", i + 1):
             try:
                 end = _balanced(text, i + 2)
+            except _NestingLimit:
+                gaps.add("NESTING_LIMIT")
+                flush()
+                return tokens
             except _Unterminated:
                 gaps.add("UNPARSED_QUOTING")
                 flush()
@@ -490,10 +516,17 @@ class _Analysis:
         self.literal_heads: list[str] = []         # literal program words of this run's simple commands
         self.unresolved = 0                        # sites that produced EXPANSION_NOT_RESOLVED
         self._sub_heads: list[str] = []            # literal heads of the current command's own $(...)
+        self.qualified_eval_sites: list[str] = []
+        self.unresolved_non_eval_sites = 0
+        self._word_sources: dict[int, set[str]] = {}  # taint belongs to its exact argument
 
-    def unresolved_site(self) -> None:
+    def unresolved_site(self, evaluated_program: str | None = None) -> None:
         self.gaps.add("EXPANSION_NOT_RESOLVED")
         self.unresolved += 1
+        if evaluated_program is None:
+            self.unresolved_non_eval_sites += 1
+        else:
+            self.qualified_eval_sites.append(evaluated_program)
 
     def found(self, rules: set[str], line: int) -> None:
         if rules:
@@ -506,6 +539,8 @@ class _Analysis:
         self.found(sub.patterns, line)
         self.evaluated_programs.extend(sub.evaluated_programs)
         self.unresolved += sub.unresolved
+        self.qualified_eval_sites.extend(sub.qualified_eval_sites)
+        self.unresolved_non_eval_sites += sub.unresolved_non_eval_sites
         return sub
 
     def value(self, name: str, value: str, word: Word) -> None:
@@ -525,11 +560,15 @@ class _Analysis:
         """Analyse one simple command; return (output source class, reads code from stdin)."""
         sub_emits: set[str] = set()
         sub_heads: list[str] = []
+        self._word_sources = {}
         for w in cmd.words:
+            word_sources: set[str] = set()
             for body in w.subs:
                 sub = self.nested(body, w.line)
-                sub_emits.update(sub.emits)
+                word_sources.update(sub.emits)
                 sub_heads.extend(sub.literal_heads)
+            self._word_sources[id(w)] = word_sources
+            sub_emits.update(word_sources)
         self.emits.update(sub_emits)
         self._sub_emits = sub_emits
         self._sub_heads = sub_heads
@@ -538,7 +577,7 @@ class _Analysis:
         # `exec 3<>/dev/tcp/H/P`). Checked before wrappers are stripped, since
         # `exec` leaves no command word behind.
         for _op, target in cmd.redirects:
-            if isinstance(target, Word) and target.text.startswith(NETWORK_DEVICE_PREFIXES):
+            if _op != "<<<" and isinstance(target, Word) and target.text.startswith(NETWORK_DEVICE_PREFIXES):
                 self.found({"NETWORK_REDIRECTION"}, target.line)
         procsub_emits = []
         for doc in cmd.procsubs:
@@ -588,7 +627,10 @@ class _Analysis:
                 target = args[0]
                 if target.text.startswith("\x00PROCSUB"):
                     index = int(target.text.strip("\x00").removeprefix("PROCSUB"))
-                    self._code_from(procsub_emits[index], line)
+                    if 0 <= index < len(procsub_emits):
+                        self._code_from(procsub_emits[index], line)
+                    else:
+                        self.unresolved_site()
                 elif _temporary(target.text):
                     self.found({"TEMP_PATH_IN_EXECUTION"}, line)
                 else:
@@ -596,9 +638,12 @@ class _Analysis:
             return "", False
         if name == "eval":
             if any(w.expands for w in args):
-                self.unresolved_site()
-                # eval "$(prog args)": the code is prog's output. The caller may
-                # decide what it trusts about prog; here it is only recorded.
+                # Counts over a whole file are not evidence about this site.
+                # Only an isolated, single command-substitution operand with
+                # exactly one literal producer is eligible for trust review.
+                eligible = (len(args) == 1 and args[0].text == "\x00SUB\x00"
+                            and len(args[0].subs) == 1 and len(sub_heads) == 1 and not sub_emits)
+                self.unresolved_site(sub_heads[0] if eligible else None)
                 if sub_heads and not sub_emits:
                     self.evaluated_programs.extend(sub_heads)
             # eval "$(curl ...)": the evaluated string is the download itself.
@@ -609,12 +654,49 @@ class _Analysis:
             return self._shell(args, cmd, procsub_emits, line)
         if re.fullmatch(r"python(?:\d+(?:\.\d+)?)?", name) or name in INTERPRETERS:
             inline = "-c" if name.startswith("python") else INTERPRETERS[name]
-            options = [w.text for w in args if w.text.startswith("-") and w.text != "-"]
-            if any(o == inline or o == "--eval" or (not o.startswith("--") and inline[1] in o[1:]) for o in options):
+            # Options are meaningful only BEFORE the script/module operand.
+            # A literal script followed by "-c $(curl ...)" passes those words
+            # as ordinary argv; it does not execute the downloaded data.
+            prefix: list[tuple[int, Word]] = []
+            for position, option in enumerate(args):
+                if option.text == "--" or option.text == "-" or not option.text.startswith("-"):
+                    break
+                prefix.append((position, option))
+            code_words: list[Word] = []
+            uncertain_code_option = False
+            for position, option in prefix:
+                flag = option.text
+                is_node = name in {"node", "nodejs"}
+                if flag == inline or (is_node and flag == "--eval"):
+                    if position + 1 < len(args):
+                        code_words.append(args[position + 1])
+                    else:
+                        uncertain_code_option = True
+                elif is_node and flag.startswith("--eval="):
+                    # The shell substituted the value inside the *same* word.
+                    code_words.append(option)
+                elif flag.startswith(inline):
+                    # Short attached form: -cPROGRAM / -ePROGRAM / -rCODE.
+                    code_words.append(option)
+                elif (name.startswith("python") and flag.startswith("-")
+                      and not flag.startswith("--") and flag.endswith("c")
+                      and all(ch in "BbEdEiIOqsSuUvVW" for ch in flag[1:-1])):
+                    # Explicitly recognized no-value Python short-option group.
+                    if position + 1 < len(args):
+                        code_words.append(args[position + 1])
+                    else:
+                        uncertain_code_option = True
+                elif (flag.startswith("--eval") or
+                      (not flag.startswith("--") and inline.removeprefix("-") in flag)):
+                    # An unfamiliar compound form is NOT proof of executed
+                    # code; preserve uncertainty rather than guessing argv.
+                    uncertain_code_option = True
+            if code_words or uncertain_code_option:
                 self.gaps.add("INLINE_INTERPRETER_CODE_NOT_ANALYZED")
-                self._code_from(sub_emits, line)  # python3 -c "$(curl ...)"
+                for word in code_words:
+                    self._code_from(self._word_sources.get(id(word), set()), line)
                 return "", False
-            if "-m" in options:
+            if any(w.text == "-m" for _i, w in prefix):
                 return "", False
             return "", self._script_operand(args, procsub_emits, line, cmd)
         if name.lower() in {"powershell", "pwsh"} and any(t.lower() == "-encodedcommand" for t in text[1:]):
@@ -645,7 +727,10 @@ class _Analysis:
         script = operands[0]
         if script.text.startswith("\x00PROCSUB"):
             index = int(script.text.strip("\x00").removeprefix("PROCSUB"))
-            self._code_from(procsub_emits[index], line)
+            if 0 <= index < len(procsub_emits):
+                self._code_from(procsub_emits[index], line)
+            else:
+                self.unresolved_site()
         elif _temporary(script.text):
             self.found({"TEMP_PATH_IN_EXECUTION"}, line)
         elif script.expands:
@@ -678,7 +763,7 @@ class _Analysis:
                 return "", False
             if rest[0].expands:
                 self.unresolved_site()
-                self._code_from(self._sub_emits, line)  # sh -c "$(curl ...)"
+                self._code_from(self._word_sources.get(id(rest[0]), set()), line)  # only the executed -c operand
             self.nested(rest[0].text, line)
             return "", False
         if any(o == "-s" or (not o.startswith("--") and "s" in o[1:]) for o in options):
@@ -733,4 +818,6 @@ def analyze(text: str, depth: int = 0) -> dict:
             "limitations": sorted(result.gaps),
             "sourced": result.sourced,
             "evaluated_programs": result.evaluated_programs,
+            "qualified_eval_sites": result.qualified_eval_sites,
+            "unresolved_non_eval_sites": result.unresolved_non_eval_sites,
             "unresolved_expansions": result.unresolved}

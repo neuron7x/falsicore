@@ -19,8 +19,8 @@ class ReleaseEvidenceCheck(unittest.TestCase):
             with patch.object(release_evidence, "OUT", path):
                 return release_evidence.main(["--check"])
 
-    def test_current_green_file_passes(self):
-        self.assertEqual(self.check_with({"schema": release_evidence.SCHEMA, "version": __version__, "suite": {"exit": 0}}), 0)
+    def test_historical_green_file_cannot_certify_current_source(self):
+        self.assertEqual(self.check_with({"schema": release_evidence.SCHEMA, "version": __version__, "suite": {"exit": 0}}), 1)
 
     def test_stale_version_or_schema_fails(self):
         self.assertEqual(self.check_with({"schema": release_evidence.SCHEMA, "version": "0.0.1", "suite": {"exit": 0}}), 1)
@@ -30,8 +30,8 @@ class ReleaseEvidenceCheck(unittest.TestCase):
         self.assertEqual(self.check_with({"schema": release_evidence.SCHEMA, "version": __version__, "suite": {"exit": 1}}), 1)
         self.assertEqual(self.check_with({"schema": release_evidence.SCHEMA, "version": __version__}), 1)
 
-    def test_committed_file_is_current(self):
-        self.assertEqual(release_evidence.main(["--check"]), 0)
+    def test_committed_file_is_historical_only(self):
+        self.assertEqual(release_evidence.main(["--check"]), 1)
 
 
 if __name__ == "__main__":

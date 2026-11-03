@@ -130,15 +130,62 @@ class ExecutorInternals(unittest.TestCase):
         r = _run_bounded("/nonexistent/falsicore-probe", [], timeout=5, limit=1024)
         self.assertIs(r["residual_killed"], False)
 
-    def test_group_cleanup_denied_is_labelled_only_when_no_other_error(self):   # safety:206
-        with patch("falsicore.safety.os.killpg", side_effect=PermissionError(1, "denied")):
-            ok = _run_bounded(PY, ["-c", "pass"], timeout=5, limit=1024)
-            self.assertEqual(ok["error"], "PROCESS_GROUP_CLEANUP_DENIED")
-            slow = _run_bounded(PY, ["-c", "import time; time.sleep(5)"], timeout=0.3, limit=1024)
-            # The first error is kept; with the kill denied the child still holds the pipe, which is then reported too.
-            self.assertTrue(slow["error"].startswith("timeout"))
-            self.assertNotIn("PROCESS_GROUP_CLEANUP_DENIED", slow["error"])
-            self.assertEqual(slow["status"], "FAILED")
+    def test_probe_pipes_are_configured_nonblocking(self):
+        # If set_blocking is deleted or its flag is flipped, the captured data
+        # may look correct on an ordinary pipe, but the spurious-wakeup guard is gone.
+        original = os.set_blocking
+        calls = []
+
+        def record(fd, blocking):
+            calls.append((fd, blocking))
+            return original(fd, blocking)
+
+        with patch("falsicore.safety.os.set_blocking", side_effect=record):
+            result = _run_bounded(
+                PY, ["-c", "import sys;sys.stdout.write('ok');sys.stderr.write('benign')"],
+                timeout=5, limit=1024,
+            )
+        self.assertEqual((result["status"], result["stdout"], result["stderr"]),
+                         ("COMPLETED", "ok", "benign"))
+        self.assertEqual(len(calls), 2, "both captured pipes must be explicitly configured")
+        self.assertEqual(len({fd for fd, _ in calls}), 2)
+        self.assertTrue(all(blocking is False for _, blocking in calls))
+
+    def test_missing_group_after_clean_exit_is_a_benign_cleanup_twin(self):
+        # A genuine ProcessLookupError after exit requires no further group kill.
+        with patch("falsicore.safety.os.killpg", side_effect=ProcessLookupError):
+            result = _run_bounded(PY, ["-c", "pass"], timeout=5, limit=1024)
+        self.assertEqual((result["status"], result["error"], result["exit"]),
+                         ("COMPLETED", "", 0))
+
+    def test_group_cleanup_denied_is_labelled_only_when_no_other_error(self):   # safety cleanup
+        # Deliberately simulate denied killpg; retain child handles until we reap
+        # them in finally, rather than leaking an orphaned subprocess in CI.
+        spawned = []
+        original_popen = subprocess.Popen
+
+        def record_child(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            spawned.append(child)
+            return child
+
+        try:
+            with patch("falsicore.safety.subprocess.Popen", side_effect=record_child), \
+                 patch("falsicore.safety.os.killpg", side_effect=PermissionError(1, "denied")):
+                clean_output = _run_bounded(PY, ["-c", "pass"], timeout=5, limit=1024)
+                self.assertEqual(clean_output["error"], "PROCESS_GROUP_CLEANUP_DENIED")
+                self.assertEqual(clean_output["status"], "FAILED",
+                                 "successful output cannot override denied group cleanup")
+                slow = _run_bounded(PY, ["-c", "import time; time.sleep(5)"], timeout=0.3, limit=1024)
+                # The original timeout remains primary; no false successful cleanup.
+                self.assertTrue(slow["error"].startswith("timeout"))
+                self.assertNotIn("PROCESS_GROUP_CLEANUP_DENIED", slow["error"])
+                self.assertEqual(slow["status"], "FAILED")
+        finally:
+            for child in spawned:
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=5)
 
     def test_self_test_merges_stderr_into_the_transcript(self):        # safety:378
         with patch("falsicore.safety._run_bounded", return_value={"status": "COMPLETED"}) as rb:
